@@ -547,7 +547,7 @@ const Library = () => {
                 const creatorName = meme.creator_id === "admin" ? "Admin" : (userCache[meme.creator_id] || "Creator");
 
                 return (
-                  <div key={meme.id} className={`flex flex-col h-full overflow-hidden ${containerClass}`}>
+                  <div key={meme.id} className={`flex flex-col h-full overflow-hidden transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-md ${containerClass}`}>
                     
                     {/* Visual Media Preview Box */}
                     <div 

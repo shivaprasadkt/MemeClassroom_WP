@@ -88,15 +88,15 @@ const MoreResources = () => {
   // UDL Styling classes
   const containerClass = highContrastMode
     ? "bg-black border-2 border-yellow-400 text-yellow-400 p-5 rounded-none"
-    : "glass-panel bg-white/50 dark:bg-gray-900/60 backdrop-blur-md border border-gray-250/50 dark:border-gray-800/40 p-5 rounded-2xl shadow-lg flex flex-col justify-between h-full hover:translate-y-[-2px] transition-all duration-200";
+    : "glass-panel bg-white/50 dark:bg-gray-900/60 backdrop-blur-md border border-gray-250/50 dark:border-gray-800/40 p-5 rounded-xl shadow-sm flex flex-col justify-between h-full transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-md";
 
   const btnClass = highContrastMode
     ? "bg-black border-2 border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black font-black px-4 py-2 text-xs"
-    : "bg-purple-600 hover:bg-purple-750 text-white font-semibold px-4 py-2 rounded-lg text-xs transition shadow-sm";
+    : "bg-purple-600 hover:bg-purple-750 text-white font-semibold px-4 py-2 rounded-lg text-xs transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-md";
 
   const actionBtnClass = highContrastMode
     ? "bg-black border-2 border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black font-black w-full py-2 text-xs text-center block"
-    : "bg-indigo-650 hover:bg-indigo-700 text-white font-bold w-full py-2.5 rounded-lg text-xs text-center block transition shadow-sm";
+    : "bg-indigo-650 hover:bg-indigo-700 text-white font-bold w-full py-2.5 rounded-lg text-xs text-center block transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-md";
 
   const inputClass = highContrastMode
     ? "bg-black border border-yellow-400 text-yellow-400 placeholder-yellow-600 p-2 text-xs w-full"
@@ -107,7 +107,7 @@ const MoreResources = () => {
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-gray-200 dark:border-gray-855 pb-5">
         <div>
-          <h1 className="text-3xl font-extrabold tracking-tight">More Resources</h1>
+          <h1 className="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">More Resources</h1>
           <p className="mt-1 text-sm text-gray-500">
             Curated list of external pedagogical websites, toolkits, and platforms.
           </p>
@@ -128,7 +128,7 @@ const MoreResources = () => {
               <div key={link.id} className={containerClass}>
                 <div>
                   {/* Thumbnail Image Container */}
-                  <div className="w-full aspect-video rounded-xl overflow-hidden mb-4 border border-gray-250/50 dark:border-gray-800 bg-gray-100 dark:bg-gray-950">
+                  <div className="w-full aspect-video rounded-lg overflow-hidden mb-4 border border-gray-250/50 dark:border-gray-805 bg-gray-100 dark:bg-gray-955">
                     <img 
                       src={link.image_url} 
                       alt={link.title} 
@@ -157,7 +157,7 @@ const MoreResources = () => {
                   </a>
 
                   {/* Contributor badge footer */}
-                  <div className="pt-2 border-t border-gray-150 dark:border-gray-750 flex items-center justify-between text-[10px] text-gray-400 font-semibold">
+                  <div className="pt-2 border-t border-gray-155 dark:border-gray-750 flex items-center justify-between text-[10px] text-gray-400 font-semibold">
                     <span>Added: {link.created_at ? new Date(link.created_at.seconds * 1000).toLocaleDateString() : "Just now"}</span>
                     <button
                       onClick={() => openUserModal(link.contributor_id)}
@@ -180,7 +180,7 @@ const MoreResources = () => {
       {/* Form Submission modal */}
       {showFormModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 ${highContrastMode ? 'bg-black border-2 border-yellow-400 text-yellow-400' : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-2xl rounded-2xl'}`}>
+          <div className={`w-full max-w-md p-6 ${highContrastMode ? 'bg-black border-2 border-yellow-400 text-yellow-400' : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-2xl rounded-xl'}`}>
             <h3 className="text-base font-extrabold mb-4">Contribute External Link</h3>
             
             {submitError && (
@@ -237,7 +237,7 @@ const MoreResources = () => {
                 <button 
                   type="button" 
                   onClick={() => setShowFormModal(false)}
-                  className={`px-4 py-2 font-semibold ${highContrastMode ? 'text-yellow-400 hover:bg-yellow-400 hover:text-black border border-yellow-400' : 'text-gray-505 hover:bg-gray-100 rounded-lg'}`}
+                  className={`px-4 py-2 font-semibold ${highContrastMode ? 'text-yellow-400 border border-yellow-400 bg-black' : 'text-gray-505 hover:bg-gray-100 rounded-lg'}`}
                 >
                   Cancel
                 </button>
