@@ -6,6 +6,7 @@ import {
   onSnapshot, 
   doc, 
   getDoc,
+  getDocs,
   setDoc,
   addDoc, 
   updateDoc, 
@@ -608,6 +609,154 @@ const Admin = () => {
       triggerAlert(`Media Pruning Completed! Cleared ${mockPrunedCount} expired attachments from Staffroom logs. Saved ${mockSpaceSaved} MB of hosting space.`);
     } catch (e) {
       triggerAlert(e.message || "Manual pruning cleanup failed.", "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  // SEED TEST DATA ACTION
+  const handleSeedTestData = async () => {
+    if (profile.role !== "admin") return;
+    setLoadingAction(true);
+    try {
+      const mockTemplates = [
+        {
+          title: "Physics: Centripetal Force vs Inertia Breakdown",
+          format: "image",
+          media_url: "https://images.unsplash.com/photo-1635070041078-e363dbe005cb?auto=format&fit=crop&w=600&q=80",
+          status: "approved",
+          creator_id: user.uid,
+          is_placeholder: true,
+          created_at: serverTimestamp()
+        },
+        {
+          title: "Computer Science: Fetch-Decode-Execute Cycle Loop",
+          format: "gif",
+          media_url: "https://images.unsplash.com/photo-1517694712202-14dd9538aa97?auto=format&fit=crop&w=600&q=80",
+          status: "approved",
+          creator_id: user.uid,
+          is_placeholder: true,
+          created_at: serverTimestamp()
+        }
+      ];
+
+      const mockMemes = [
+        {
+          title: "Chemistry: Valency Shell Octet Configuration Mock",
+          format: "image",
+          media_url: "https://images.unsplash.com/photo-1614064641938-3bbee52942c7?auto=format&fit=crop&w=600&q=80",
+          subject: "Chemistry",
+          age_group: "13-15",
+          language: "English",
+          visibility: "public",
+          creator_id: user.uid,
+          creator_name: profile.name || "Guest Developer",
+          likes_count: 12,
+          ratings_count: 4,
+          is_placeholder: true,
+          created_at: serverTimestamp()
+        },
+        {
+          title: "Mathematics: The Fibonacci Spiral Proportion Meme",
+          format: "image",
+          media_url: "https://images.unsplash.com/photo-1509228468518-180dd4864904?auto=format&fit=crop&w=600&q=80",
+          subject: "Maths",
+          age_group: "10-12",
+          language: "English",
+          visibility: "public",
+          creator_id: user.uid,
+          creator_name: profile.name || "Guest Developer",
+          likes_count: 8,
+          ratings_count: 2,
+          is_placeholder: true,
+          created_at: serverTimestamp()
+        }
+      ];
+
+      const mockExternalLinks = [
+        {
+          title: "OER Commons High School Physics Lab Guides",
+          description: "Open educational resources index detailing hands-on kinematics activities, vector coordinates, and centripetal acceleration templates.",
+          destination_url: "https://www.oercommons.org/hubs/physics",
+          image_url: "https://images.unsplash.com/photo-1532094349884-543bc11b234d?auto=format&fit=crop&w=600&q=80",
+          contributor_id: user.uid,
+          is_placeholder: true,
+          created_at: serverTimestamp()
+        },
+        {
+          title: "Merlot II Computer Fundamentals Tutorials Reference",
+          description: "Peer-reviewed OER collection spanning binary numbers conversion, hardware systems, logic gates, and processor architectures.",
+          destination_url: "https://www.merlot.org/merlot/index.htm",
+          image_url: "https://images.unsplash.com/photo-1581091226825-a6a2a5aee158?auto=format&fit=crop&w=600&q=80",
+          contributor_id: user.uid,
+          is_placeholder: true,
+          created_at: serverTimestamp()
+        },
+        {
+          title: "PhET Interactive Chemistry Simulations Toolkit",
+          description: "Freely accessible HTML5 atomic structure simulations supporting student hypothesis testing and OER activity sheets.",
+          destination_url: "https://phet.colorado.edu/",
+          image_url: "https://images.unsplash.com/photo-1603126857599-f6e157fa2fe6?auto=format&fit=crop&w=600&q=80",
+          contributor_id: user.uid,
+          is_placeholder: true,
+          created_at: serverTimestamp()
+        }
+      ];
+
+      // Seed templates
+      for (const t of mockTemplates) {
+        await addDoc(collection(db, "templates"), t);
+      }
+
+      // Seed memes
+      for (const m of mockMemes) {
+        await addDoc(collection(db, "memes"), m);
+      }
+
+      // Seed external links
+      for (const el of mockExternalLinks) {
+        await addDoc(collection(db, "external_links"), el);
+      }
+
+      triggerAlert("Sandbox Test Data seeded successfully! Staged 7 placeholder documents.");
+    } catch (e) {
+      triggerAlert(e.message || "Failed to seed test data.", "error");
+    } finally {
+      setLoadingAction(false);
+    }
+  };
+
+  // WIPE PLACEHOLDER DATA ACTION
+  const handleWipePlaceholderData = async () => {
+    if (profile.role !== "admin") return;
+    setLoadingAction(true);
+    try {
+      let count = 0;
+      
+      // Wipe templates
+      const templatesSnap = await getDocs(query(collection(db, "templates"), where("is_placeholder", "==", true)));
+      for (const d of templatesSnap.docs) {
+        await deleteDoc(d.ref);
+        count++;
+      }
+
+      // Wipe memes
+      const memesSnap = await getDocs(query(collection(db, "memes"), where("is_placeholder", "==", true)));
+      for (const d of memesSnap.docs) {
+        await deleteDoc(d.ref);
+        count++;
+      }
+
+      // Wipe external links
+      const linksSnap = await getDocs(query(collection(db, "external_links"), where("is_placeholder", "==", true)));
+      for (const d of linksSnap.docs) {
+        await deleteDoc(d.ref);
+        count++;
+      }
+
+      triggerAlert(`Wipe complete! Removed ${count} placeholder documents from Firestore collections.`);
+    } catch (e) {
+      triggerAlert(e.message || "Failed to wipe placeholder data.", "error");
     } finally {
       setLoadingAction(false);
     }
@@ -1587,117 +1736,147 @@ const Admin = () => {
 
       {/* TAB CONTENT F: SYSTEM TAXONOMY CONFIGS (Admin Only) */}
       {activeTab === "taxonomy" && profile.role === "admin" && (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
-          
-          {/* Subjects configuration list */}
-          <div className={`p-6 ${containerClass} space-y-6`}>
-            <h3 className="text-sm font-extrabold mb-4 border-b pb-2 uppercase text-gray-400">
-              Curricular Subjects Config
-            </h3>
+        <>
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
             
-            <form onSubmit={handleAddSubject} className="flex space-x-2">
-              <input 
-                type="text" 
-                value={newTaxSubject} 
-                onChange={e => setNewTaxSubject(e.target.value)} 
-                className={inputClass} 
-                placeholder="e.g. Economics"
-              />
-              <button type="submit" className={btnClass("purple")}>
-                Add
-              </button>
-            </form>
-
-            <div className="space-y-2 max-h-60 overflow-y-auto pt-2">
-              {taxonomy.subjects.map(sub => (
-                <div key={sub} className="flex justify-between items-center p-2 bg-gray-50 dark:bg-gray-900 rounded border border-gray-150 dark:border-gray-800 text-xs">
-                  <span>{sub}</span>
-                  <button 
-                    onClick={() => handleRemoveSubject(sub)}
-                    className="text-red-500 hover:text-red-700 font-bold"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Grades configuration list */}
-          <div className={`p-6 ${containerClass} space-y-6`}>
-            <h3 className="text-sm font-extrabold mb-4 border-b pb-2 uppercase text-gray-400">
-              Grade Groups Config
-            </h3>
-
-            <form onSubmit={handleAddGrade} className="flex space-x-2">
-              <input 
-                type="text" 
-                value={newTaxGrade} 
-                onChange={e => setNewTaxGrade(e.target.value)} 
-                className={inputClass} 
-                placeholder="e.g. 7-9"
-              />
-              <button type="submit" className={btnClass("purple")}>
-                Add
-              </button>
-            </form>
-
-            <div className="space-y-2 max-h-60 overflow-y-auto pt-2">
-              {taxonomy.grades.map(gr => (
-                <div key={gr} className="flex justify-between items-center p-2 bg-gray-50 dark:bg-gray-900 rounded border border-gray-150 dark:border-gray-800 text-xs">
-                  <span>Ages {gr}</span>
-                  <button 
-                    onClick={() => handleRemoveGrade(gr)}
-                    className="text-red-500 hover:text-red-700 font-bold"
-                  >
-                    ✕
-                  </button>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Manual Pruning trigger */}
-          <div className={`p-6 ${containerClass} flex flex-col justify-between`}>
-            <div>
+            {/* Subjects configuration list */}
+            <div className={`p-6 ${containerClass} space-y-6`}>
               <h3 className="text-sm font-extrabold mb-4 border-b pb-2 uppercase text-gray-400">
-                Staffroom Pruning Controls
+                Curricular Subjects Config
               </h3>
               
-              <div className={bannerClass}>
-                <span className="text-base mr-2 block mb-1">🧼 Data Storage Policies</span>
-                To maintain database optimization guidelines, temporary media attachments contributed to Staffroom forum responses are archived and pruned automatically after 30 days. Text discussions remain completely intact.
-              </div>
+              <form onSubmit={handleAddSubject} className="flex space-x-2">
+                <input 
+                  type="text" 
+                  value={newTaxSubject} 
+                  onChange={e => setNewTaxSubject(e.target.value)} 
+                  className={inputClass} 
+                  placeholder="e.g. Economics"
+                />
+                <button type="submit" className={btnClass("purple")}>
+                  Add
+                </button>
+              </form>
 
-              <div className="mt-6 space-y-2 text-xs">
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Total Cleared Attachments:</span>
-                  <span className="font-bold">{pruningLog.pruned_count || 0} files</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Total Reclaimed Hosting Space:</span>
-                  <span className="font-bold text-purple-650">{(pruningLog.space_saved_mb || 0).toFixed(2)} MB</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-gray-400">Last Cleanup Run:</span>
-                  <span className="font-bold">
-                    {pruningLog.last_pruned_at 
-                      ? new Date(pruningLog.last_pruned_at.seconds * 1000).toLocaleString() 
-                      : "Never"}
-                  </span>
-                </div>
+              <div className="space-y-2 max-h-60 overflow-y-auto pt-2">
+                {taxonomy.subjects.map(sub => (
+                  <div key={sub} className="flex justify-between items-center p-2 bg-gray-50 dark:bg-gray-900 rounded border border-gray-150 dark:border-gray-800 text-xs">
+                    <span>{sub}</span>
+                    <button 
+                      onClick={() => handleRemoveSubject(sub)}
+                      className="text-red-500 hover:text-red-700 font-bold"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
               </div>
             </div>
 
-            <button 
-              onClick={handleManualPruningOverride}
-              disabled={loadingAction}
-              className={btnClass("indigo") + " w-full mt-6"}
-            >
-              {loadingAction ? "Cleaning up..." : "🧹 Run Manual Pruning Override"}
-            </button>
+            {/* Grades configuration list */}
+            <div className={`p-6 ${containerClass} space-y-6`}>
+              <h3 className="text-sm font-extrabold mb-4 border-b pb-2 uppercase text-gray-400">
+                Grade Groups Config
+              </h3>
+
+              <form onSubmit={handleAddGrade} className="flex space-x-2">
+                <input 
+                  type="text" 
+                  value={newTaxGrade} 
+                  onChange={e => setNewTaxGrade(e.target.value)} 
+                  className={inputClass} 
+                  placeholder="e.g. 7-9"
+                />
+                <button type="submit" className={btnClass("purple")}>
+                  Add
+                </button>
+              </form>
+
+              <div className="space-y-2 max-h-60 overflow-y-auto pt-2">
+                {taxonomy.grades.map(gr => (
+                  <div key={gr} className="flex justify-between items-center p-2 bg-gray-50 dark:bg-gray-900 rounded border border-gray-150 dark:border-gray-800 text-xs">
+                    <span>Ages {gr}</span>
+                    <button 
+                      onClick={() => handleRemoveGrade(gr)}
+                      className="text-red-500 hover:text-red-700 font-bold"
+                    >
+                      ✕
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Manual Pruning trigger */}
+            <div className={`p-6 ${containerClass} flex flex-col justify-between`}>
+              <div>
+                <h3 className="text-sm font-extrabold mb-4 border-b pb-2 uppercase text-gray-400">
+                  Staffroom Pruning Controls
+                </h3>
+                
+                <div className={bannerClass}>
+                  <span className="text-base mr-2 block mb-1">🧼 Data Storage Policies</span>
+                  To maintain database optimization guidelines, temporary media attachments contributed to Staffroom forum responses are archived and pruned automatically after 30 days. Text discussions remain completely intact.
+                </div>
+
+                <div className="mt-6 space-y-2 text-xs">
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Total Cleared Attachments:</span>
+                    <span className="font-bold">{pruningLog.pruned_count || 0} files</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Total Reclaimed Hosting Space:</span>
+                    <span className="font-bold text-purple-650">{(pruningLog.space_saved_mb || 0).toFixed(2)} MB</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-gray-400">Last Cleanup Run:</span>
+                    <span className="font-bold">
+                      {pruningLog.last_pruned_at 
+                        ? new Date(pruningLog.last_pruned_at.seconds * 1000).toLocaleString() 
+                        : "Never"}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <button 
+                onClick={handleManualPruningOverride}
+                disabled={loadingAction}
+                className={btnClass("indigo") + " w-full mt-6"}
+              >
+                {loadingAction ? "Cleaning up..." : "🧹 Run Manual Pruning Override"}
+              </button>
+            </div>
           </div>
-        </div>
+
+          {/* Developer Sandbox Testing Utilities */}
+          <div className={`p-6 ${containerClass} mt-8 space-y-4`}>
+            <div>
+              <h3 className="text-sm font-extrabold border-b pb-2 uppercase text-gray-400">
+                Developer Sandbox Testing Utilities
+              </h3>
+              <p className="text-xs text-gray-500 mt-2 leading-relaxed">
+                Use these staging controls to seed or wipe highly realistic placeholder documents (`is_placeholder: true`) across `/memes`, `/templates`, and `/external_links` database paths to quickly evaluate UI bindings.
+              </p>
+            </div>
+            <div className="flex flex-wrap gap-4 pt-2">
+              <button
+                onClick={handleSeedTestData}
+                disabled={loadingAction}
+                className={btnClass("purple")}
+              >
+                🌱 Seed Sandbox Test Data
+              </button>
+              <button
+                onClick={handleWipePlaceholderData}
+                disabled={loadingAction}
+                className={btnClass("red") + " border border-red-650 bg-red-900/10 hover:bg-red-900/20 text-red-500"}
+              >
+                🗑️ Wipe Placeholder Data
+              </button>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
