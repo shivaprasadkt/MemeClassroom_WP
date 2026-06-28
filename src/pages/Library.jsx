@@ -919,7 +919,7 @@ const Library = () => {
       {/* 3. DIRECT MEME UPLOAD MODAL */}
       {showDirectUploadModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 rounded-xl ${containerClass}`}>
+          <div className={`w-full max-w-md p-6 rounded-xl overflow-y-auto max-h-[90vh] ${containerClass}`}>
             <h2 className="text-lg font-bold mb-2">Direct Meme Upload</h2>
             <p className="text-xs text-gray-500 mb-6">
               Skip the editor canvas and upload a finished image meme directly from your device storage.

@@ -180,7 +180,7 @@ const MoreResources = () => {
       {/* Form Submission modal */}
       {showFormModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 ${highContrastMode ? 'bg-black border-2 border-yellow-400 text-yellow-400' : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-2xl rounded-xl'}`}>
+          <div className={`w-full max-w-md p-6 overflow-y-auto max-h-[90vh] ${highContrastMode ? 'bg-black border-2 border-yellow-400 text-yellow-400' : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-2xl rounded-xl'}`}>
             <h3 className="text-base font-extrabold mb-4">Contribute External Link</h3>
             
             {submitError && (

@@ -67,7 +67,7 @@ export const UserModalProvider = ({ children }) => {
       {/* Global User Info Box Overlay Modal */}
       {isOpen && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 ${modalClass}`}>
+          <div className={`w-full max-w-md p-6 overflow-y-auto max-h-[90vh] ${modalClass}`}>
             
             {loading ? (
               <div className="flex items-center justify-center py-12">
