@@ -414,7 +414,10 @@ const Staffroom = () => {
                         <span>👍</span>
                         <span>{thread.likes || 0} Upvotes</span>
                       </button>
-                      <span className="text-gray-400">💬 {activeReplies.length} Replies</span>
+                      <span className="text-gray-400 flex items-center space-x-1.5">
+                        <img src="/speech-bubbles.png" className="w-3.5 h-3.5" alt="Replies" />
+                        <span>{activeReplies.length} Replies</span>
+                      </span>
                     </div>
 
                     {/* Threaded Solution replies list */}

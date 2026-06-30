@@ -1391,7 +1391,9 @@ const Admin = () => {
                         <td className={rowCellClass}>
                           <div className="flex items-center space-x-1.5">
                             <span className="font-extrabold">{uItem.name}</span>
-                            {uItem.is_verified && <span title="Verified">🔵</span>}
+                            {uItem.is_verified && (
+                              <img src="/verified-badge.png" className="w-4 h-4 ml-1 inline-block" alt="Verified" title="Verified" />
+                            )}
                           </div>
                         </td>
                         <td className={rowCellClass}>{uItem.email}</td>

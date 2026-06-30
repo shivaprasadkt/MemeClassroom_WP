@@ -3,6 +3,13 @@ import { doc, getDoc, collection, query, where, getDocs } from "firebase/firesto
 import { db } from "../firebase";
 import { useUdl } from "./UdlContext";
 
+const getBadgeIcon = (level) => {
+  if (level >= 5) return "/diamond.png";
+  if (level >= 3) return "/trophy.png";
+  if (level >= 1) return "/medal.png";
+  return "/medal.png";
+};
+
 const UserModalContext = createContext();
 
 export const UserModalProvider = ({ children }) => {
@@ -80,7 +87,9 @@ export const UserModalProvider = ({ children }) => {
                 <div>
                   <div className="flex items-center space-x-2">
                     <h3 className="text-xl font-extrabold">{userData.name}</h3>
-                    {userData.is_verified && <span title="Verified User">🔵</span>}
+                    {userData.is_verified && (
+                      <img src="/verified-badge.png" className="w-5 h-5 ml-1 inline-block" alt="Verified User" title="Verified User" />
+                    )}
                   </div>
                   <p className="text-xs font-bold uppercase tracking-wider text-purple-650 mt-1 capitalize">
                     {userData.role} • {userData.institution}
@@ -100,7 +109,7 @@ export const UserModalProvider = ({ children }) => {
                           key={badge.id} 
                           className="bg-purple-55 text-purple-750 dark:bg-purple-950/20 dark:text-purple-300 text-[10px] font-bold px-2 py-1 rounded border border-purple-200 dark:border-purple-800 flex items-center space-x-1"
                         >
-                          <span>🏅</span>
+                          <img src={getBadgeIcon(badge.level)} className="w-4 h-4" alt="Badge icon" />
                           <span>{badge.badge_name}</span>
                         </span>
                       ))}

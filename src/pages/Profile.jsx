@@ -21,6 +21,13 @@ import { useUdl } from "../context/UdlContext";
 const MILESTONES = [0, 1, 5, 10, 25, 50];
 const LEVEL_NAMES = ["None", "Bronze", "Silver", "Gold", "Platinum", "Diamond"];
 
+const getBadgeIcon = (level) => {
+  if (level >= 5) return "/diamond.png";
+  if (level >= 3) return "/trophy.png";
+  if (level >= 1) return "/medal.png";
+  return "/medal.png";
+};
+
 const CATEGORY_NAMES = {
   content_creator: { label: "Content Creator Medal", statKey: "memes_created_count" },
   knowledge_contributor: { label: "Knowledge Contributor Medal", statKey: "resources_contributed_count" },
@@ -456,9 +463,7 @@ const Profile = () => {
                   {profile.name}
                 </h2>
                 {profile.is_verified && (
-                  <span className="text-xl" title="Verified Creator">
-                    🔵
-                  </span>
+                  <img src="/verified-badge.png" className="w-5 h-5 inline-block" alt="Verified Creator" title="Verified Creator" />
                 )}
               </div>
               <p className="text-xs font-bold uppercase tracking-wider text-purple-650 mt-1 capitalize">
@@ -486,11 +491,11 @@ const Profile = () => {
       {/* 2. Scoreboard Activity Statistics Panel */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
         {[
-          { label: "Memes Shared", val: stats.memes_created_count, icon: <img src="research.png" alt="not" className="w-8 h-8" /> },
-          { label: "Resources Shared", val: stats.resources_contributed_count, icon: <img src="process.png" alt="not" className="w-8 h-8" /> },
-          { label: "Staffroom Posts", val: stats.staffroom_posts_count, icon: <img src="school.png" alt="not" className="w-8 h-8" /> },
-          { label: "Ratings Provided", val: stats.ratings_provided_count, icon: <img src="star.png" alt="not" className="w-8 h-8" /> },
-          { label: "Likes Received", val: stats.total_likes_received, icon: <img src="shape.png" alt="not" className="w-8 h-8" /> }
+          { label: "Memes Shared", val: stats.memes_created_count, icon: <img src="/research.png" alt="not" className="w-8 h-8 mx-auto" /> },
+          { label: "Resources Shared", val: stats.resources_contributed_count, icon: <img src="/process.png" alt="not" className="w-8 h-8 mx-auto" /> },
+          { label: "Staffroom Posts", val: stats.staffroom_posts_count, icon: <img src="/speech-bubbles.png" alt="not" className="w-8 h-8 mx-auto" /> },
+          { label: "Ratings Provided", val: stats.ratings_provided_count, icon: <img src="/star.png" alt="not" className="w-8 h-8 mx-auto" /> },
+          { label: "Likes Received", val: stats.total_likes_received, icon: <img src="/shape.png" alt="not" className="w-8 h-8 mx-auto" /> }
         ].map((stat, idx) => (
           <div key={idx} className={`p-4 text-center ${containerClass}`}>
             <span className="text-xl block mb-2">{stat.icon}</span>
@@ -512,7 +517,7 @@ const Profile = () => {
               <div key={category} className="space-y-2 border border-gray-100 dark:border-gray-800 p-3 rounded-lg bg-gray-50 dark:bg-gray-900">
                 <span className="block text-gray-400 uppercase text-[9px] truncate">{config.label}</span>
                 <div className="flex items-center space-x-1.5">
-                  <span className="text-base"><img src="gold-medal.png" alt="not" className="w-6 h-6" /></span>
+                  <span className="text-base"><img src={getBadgeIcon(progress.currentLevel)} alt="Badge icon" className="w-6 h-6" /></span>
                   <span className="font-bold text-gray-850 dark:text-gray-100">{progress.currentBadgeName}</span>
                 </div>
 
