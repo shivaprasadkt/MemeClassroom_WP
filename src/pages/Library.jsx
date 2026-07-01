@@ -1,12 +1,14 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   collection,
   query,
   where,
+  orderBy,
   onSnapshot,
   doc,
   getDoc,
+  getDocs,
   setDoc,
   addDoc,
   updateDoc,
@@ -37,6 +39,12 @@ const Library = () => {
   const [gradeFilter, setGradeFilter] = useState("");
   const [languageFilter, setLanguageFilter] = useState("");
   const [formatFilter, setFormatFilter] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [appliedSearchQuery, setAppliedSearchQuery] = useState("");
+  const [allRatings, setAllRatings] = useState([]);
+  const [sortBy, setSortBy] = useState("newest");
+  const [animatingHeartMemeId, setAnimatingHeartMemeId] = useState(null);
+  const [likePendingMap, setLikePendingMap] = useState({});
 
   // Modals & Details Overlay
   const [activeMeme, setActiveMeme] = useState(null);
@@ -119,55 +127,111 @@ const Library = () => {
     alert("License Notice: This media file is licensed under Creative Commons CC BY-NC-SA 4.0 parameters.");
   };
 
-  // 1. Real-time Curation Feed Listener
+  const resolvedCreatorsRef = useRef({});
+
+  // 1. Real-time Curation Feed Listener (Database-Side Sorting)
   useEffect(() => {
     const memesCol = collection(db, "memes");
-    // Show only public, unflagged memes
-    const q = query(memesCol, where("visibility", "==", "public"));
+    // Show only public, unflagged memes, sorted newest first
+    const q = query(memesCol, where("visibility", "==", "public"), orderBy("created_at", "desc"));
 
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const memeList = [];
       snapshot.forEach((doc) => {
         memeList.push({ id: doc.id, ...doc.data() });
       });
 
-      // Sort newest first
-      memeList.sort((a, b) => {
-        const timeA = a.created_at?.seconds || 0;
-        const timeB = b.created_at?.seconds || 0;
-        return timeB - timeA;
-      });
-
       setMemes(memeList);
       setFilteredMemes(memeList);
-
-      // Dynamically resolve usernames to cache
-      const uniqueCreatorIds = [...new Set(memeList.map(m => m.creator_id))];
-      uniqueCreatorIds.forEach(async (creatorId) => {
-        if (!userCache[creatorId] && creatorId !== "admin") {
-          try {
-            const userDoc = await getDoc(doc(db, "users", creatorId));
-            if (userDoc.exists()) {
-              setUserCache(prev => ({ ...prev, [creatorId]: userDoc.data().name }));
-            } else {
-              setUserCache(prev => ({ ...prev, [creatorId]: "Unknown User" }));
-            }
-          } catch (e) {
-            console.error("Error resolving username", e);
-          }
-        }
-      });
     }, (error) => {
       console.error("Firestore listening failed", error);
     });
 
     return () => unsubscribe();
-  }, [userCache]);
+  }, []);
 
-  // Real-time Likes list for the user
+  // Real-time Ratings Subscription (to compute card-level averages on client)
+  useEffect(() => {
+    const ratingsCol = collection(db, "ratings");
+    const unsubscribe = onSnapshot(ratingsCol, (snapshot) => {
+      const list = [];
+      snapshot.forEach((doc) => {
+        list.push(doc.data());
+      });
+      setAllRatings(list);
+    }, (error) => {
+      console.error("Firestore ratings listening failed", error);
+    });
+
+    return () => unsubscribe();
+  }, []);
+
+  const getMemeAverageRating = (memeId, criteria) => {
+    const memeRatings = allRatings.filter(r => r.meme_id === memeId);
+    if (memeRatings.length === 0) return 0;
+    const sum = memeRatings.reduce((acc, curr) => acc + (curr[criteria] || 0), 0);
+    return sum / memeRatings.length;
+  };
+
+  const getSubjectTagClass = (subj) => {
+    switch (String(subj).toLowerCase()) {
+      case 'maths':
+      case 'math':
+      case 'mathematics':
+        return 'tag-subject-maths';
+      case 'biology':
+        return 'tag-subject-biology';
+      case 'physics':
+        return 'tag-subject-physics';
+      case 'chemistry':
+        return 'tag-subject-chemistry';
+      case 'history':
+        return 'tag-subject-history';
+      case 'geography':
+        return 'tag-subject-geography';
+      default:
+        return 'tag-subject-default';
+    }
+  };
+
+  // Dedicated User profile (name and role) resolution listener
+  useEffect(() => {
+    const creatorIds = memes.map(m => m.creator_id);
+    const commenterIds = expertComments.map(c => c.user_id);
+    const uniqueIds = [...new Set([...creatorIds, ...commenterIds])];
+
+    uniqueIds.forEach(async (userId) => {
+      if (userId === "admin") return;
+      if (resolvedCreatorsRef.current[userId]) return;
+
+      resolvedCreatorsRef.current[userId] = "fetching";
+      try {
+        const userDoc = await getDoc(doc(db, "users", userId));
+        if (userDoc.exists()) {
+          const userData = userDoc.data();
+          resolvedCreatorsRef.current[userId] = "fetched";
+          setUserCache(prev => ({ 
+            ...prev, 
+            [userId]: { name: userData.name || "Unknown User", role: userData.role || "student" } 
+          }));
+        } else {
+          resolvedCreatorsRef.current[userId] = "fetched";
+          setUserCache(prev => ({ 
+            ...prev, 
+            [userId]: { name: "Unknown User", role: "student" } 
+          }));
+        }
+      } catch (e) {
+        console.error("Error resolving user profile", e);
+        delete resolvedCreatorsRef.current[userId];
+      }
+    });
+  }, [memes, expertComments]);
+
+  // Real-time Likes list for the user (mapped to dedicated 'likes' collection)
   useEffect(() => {
     if (!user) return;
-    const likesCol = collection(db, "saves"); // We map likes to the saves collection for simplicity
+    const likesCol = collection(db, "likes");
     const q = query(likesCol, where("user_id", "==", user.uid));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const map = {};
@@ -184,6 +248,11 @@ const Library = () => {
   useEffect(() => {
     let result = memes;
 
+    if (appliedSearchQuery.trim()) {
+      result = result.filter(m => 
+        m.title.toLowerCase().includes(appliedSearchQuery.toLowerCase().trim())
+      );
+    }
     if (subjectFilter) {
       result = result.filter(m => m.subject === subjectFilter);
     }
@@ -197,44 +266,74 @@ const Library = () => {
       result = result.filter(m => m.format === formatFilter);
     }
 
+    // Dynamic sorting
+    if (sortBy === "newest") {
+      result = [...result].sort((a, b) => {
+        const timeA = a.created_at?.seconds || 0;
+        const timeB = b.created_at?.seconds || 0;
+        return timeB - timeA;
+      });
+    } else if (sortBy === "likes") {
+      result = [...result].sort((a, b) => (b.likes_count || 0) - (a.likes_count || 0));
+    } else if (sortBy === "rating") {
+      result = [...result].sort((a, b) => {
+        const getOverall = (memeId) => {
+          const ageAvg = getMemeAverageRating(memeId, "age_appropriateness");
+          const langAvg = getMemeAverageRating(memeId, "language_appropriateness");
+          const valAvg = getMemeAverageRating(memeId, "content_validity");
+          const active = [ageAvg, langAvg, valAvg].filter(x => x > 0);
+          return active.length > 0 ? active.reduce((sum, x) => sum + x, 0) / active.length : 0;
+        };
+        return getOverall(b.id) - getOverall(a.id);
+      });
+    }
+
     setFilteredMemes(result);
-  }, [subjectFilter, gradeFilter, languageFilter, formatFilter, memes]);
+  }, [appliedSearchQuery, subjectFilter, gradeFilter, languageFilter, formatFilter, sortBy, memes, allRatings]);
 
   // Load Expert Comments & Ratings for the Active Expanded Meme
   useEffect(() => {
-    if (!activeMeme) return;
+    let unsubscribeComments = () => {};
+    let unsubscribeRatings = () => {};
 
-    // Listen to expert comments
-    const commentsCol = collection(db, "comments");
-    const commentsQuery = query(
-      commentsCol,
-      where("meme_id", "==", activeMeme.id),
-      where("is_expert_comment", "==", true)
-    );
+    // Clear stale ratings and comments immediately on activeMeme changes to prevent UI flickering
+    setCurrentMemeRatings([]);
+    setUserSubmittedRating(null);
+    setExpertComments([]);
 
-    const unsubscribeComments = onSnapshot(commentsQuery, (snapshot) => {
-      const commentList = [];
-      snapshot.forEach((doc) => {
-        commentList.push({ id: doc.id, ...doc.data() });
+    if (activeMeme) {
+      // Listen to expert comments
+      const commentsCol = collection(db, "comments");
+      const commentsQuery = query(
+        commentsCol,
+        where("meme_id", "==", activeMeme.id),
+        where("is_expert_comment", "==", true)
+      );
+
+      unsubscribeComments = onSnapshot(commentsQuery, (snapshot) => {
+        const commentList = [];
+        snapshot.forEach((doc) => {
+          commentList.push({ id: doc.id, ...doc.data() });
+        });
+        setExpertComments(commentList);
       });
-      setExpertComments(commentList);
-    });
 
-    // Listen to ratings
-    const ratingsCol = collection(db, "ratings");
-    const ratingsQuery = query(ratingsCol, where("meme_id", "==", activeMeme.id));
-    const unsubscribeRatings = onSnapshot(ratingsQuery, (snapshot) => {
-      const ratingList = [];
-      snapshot.forEach((doc) => {
-        ratingList.push({ id: doc.id, ...doc.data() });
+      // Listen to ratings
+      const ratingsCol = collection(db, "ratings");
+      const ratingsQuery = query(ratingsCol, where("meme_id", "==", activeMeme.id));
+      unsubscribeRatings = onSnapshot(ratingsQuery, (snapshot) => {
+        const ratingList = [];
+        snapshot.forEach((doc) => {
+          ratingList.push({ id: doc.id, ...doc.data() });
+        });
+        setCurrentMemeRatings(ratingList);
+
+        if (user) {
+          const myRating = ratingList.find(r => r.user_id === user.uid);
+          setUserSubmittedRating(myRating || null);
+        }
       });
-      setCurrentMemeRatings(ratingList);
-
-      if (user) {
-        const myRating = ratingList.find(r => r.user_id === user.uid);
-        setUserSubmittedRating(myRating || null);
-      }
-    });
+    }
 
     return () => {
       unsubscribeComments();
@@ -254,8 +353,39 @@ const Library = () => {
     setUploadLoading(true);
     setUploadError("");
 
+    // Validate uploaded file matching selection format
+    const fileType = uploadFile.type;
+    const fileName = uploadFile.name;
+
+    if (uploadFormat === "image") {
+      if (!fileType.startsWith("image/") || fileType === "image/gif") {
+        setUploadError("Selected file must be a static image (e.g. PNG, JPEG).");
+        setUploadLoading(false);
+        return;
+      }
+    } else if (uploadFormat === "gif") {
+      if (fileType !== "image/gif" && !fileName.toLowerCase().endsWith(".gif")) {
+        setUploadError("Selected file must be a GIF image.");
+        setUploadLoading(false);
+        return;
+      }
+    } else if (uploadFormat === "video") {
+      if (!fileType.startsWith("video/")) {
+        setUploadError("Selected file must be a video.");
+        setUploadLoading(false);
+        return;
+      }
+    } else if (uploadFormat === "audio") {
+      if (!fileType.startsWith("audio/")) {
+        setUploadError("Selected file must be an audio file.");
+        setUploadLoading(false);
+        return;
+      }
+    }
+
     try {
-      const storageRef = ref(storage, `memes/${user.uid}_meme_${Date.now()}`);
+      const extension = fileName.split('.').pop() || "bin";
+      const storageRef = ref(storage, `memes/${user.uid}_meme_${Date.now()}.${extension}`);
       const snapshot = await uploadBytes(storageRef, uploadFile);
       const fileUrl = await getDownloadURL(snapshot.ref);
 
@@ -269,14 +399,15 @@ const Library = () => {
         visibility: "public",
         media_url: fileUrl,
         template_id: "", // Direct uploads do not have a remix templates reference
+        text_layers_json: "[]", // Schema alignment fix
         created_at: serverTimestamp()
       });
 
       // Update user stats
       const statsRef = doc(db, "user_stats", user.uid);
-      await updateDoc(statsRef, {
+      await setDoc(statsRef, {
         memes_created_count: increment(1)
-      });
+      }, { merge: true });
 
       setShowDirectUploadModal(false);
       setUploadTitle("");
@@ -293,6 +424,19 @@ const Library = () => {
   const handleFlagContent = async (memeId) => {
     if (!user) return;
     try {
+      // Check if user already flagged this content
+      const flagsRef = collection(db, "flags");
+      const q = query(
+        flagsRef,
+        where("reporter_id", "==", user.uid),
+        where("content_id", "==", memeId)
+      );
+      const querySnapshot = await getDocs(q);
+      if (!querySnapshot.empty) {
+        alert("You have already reported this content.");
+        return;
+      }
+
       // 1. Log flag event to Firestore
       await addDoc(collection(db, "flags"), {
         reporter_id: user.uid,
@@ -303,14 +447,30 @@ const Library = () => {
         created_at: serverTimestamp()
       });
 
-      // 2. Switch visibility flag to hide reported item instantly from feed
+      // Get current reports count on the meme document
       const memeDocRef = doc(db, "memes", memeId);
-      await updateDoc(memeDocRef, {
-        visibility: "flagged_hidden"
-      });
-
-      if (activeMeme && activeMeme.id === memeId) {
-        setActiveMeme(null);
+      const memeSnap = await getDoc(memeDocRef);
+      if (memeSnap.exists()) {
+        const data = memeSnap.data();
+        const newReportsCount = (data.reports_count || 0) + 1;
+        
+        if (newReportsCount >= 3) {
+          // Hide the post
+          await updateDoc(memeDocRef, {
+            reports_count: newReportsCount,
+            visibility: "flagged_hidden"
+          });
+          alert("Content has been reported and hidden due to multiple community flags.");
+          if (activeMeme && activeMeme.id === memeId) {
+            setActiveMeme(null);
+          }
+        } else {
+          // Just increment count without hiding
+          await updateDoc(memeDocRef, {
+            reports_count: newReportsCount
+          });
+          alert("Thank you for your report. The community moderation team will review this content.");
+        }
       }
     } catch (e) {
       console.error("Flag content failed", e);
@@ -320,31 +480,51 @@ const Library = () => {
   // 5. Like Matrix: increment/decrement total_likes_received of the creator
   const handleLikeToggle = async (memeId, creatorId) => {
     if (!user) return;
+    if (likePendingMap[memeId]) return;
+
+    // Concurrency block
+    setLikePendingMap(prev => ({ ...prev, [memeId]: true }));
+
+    // Trigger scale pop animation
+    setAnimatingHeartMemeId(memeId);
+    setTimeout(() => {
+      setAnimatingHeartMemeId(null);
+    }, 300);
+
     const existingLikeId = userLikesMap[memeId];
+    const statsRef = doc(db, "user_stats", creatorId);
+    const memeRef = doc(db, "memes", memeId);
 
     try {
-      const statsRef = doc(db, "user_stats", creatorId);
-
       if (existingLikeId) {
-        // Unlike: remove from saves & decrement creator likes count
-        await deleteDoc(doc(db, "saves", existingLikeId));
-        await updateDoc(statsRef, {
+        // Unlike: remove from likes & decrement creator likes count
+        await deleteDoc(doc(db, "likes", existingLikeId));
+        await setDoc(statsRef, {
           total_likes_received: increment(-1)
+        }, { merge: true });
+        await updateDoc(memeRef, {
+          likes_count: increment(-1)
         });
       } else {
-        // Like: create save document & increment creator likes count
+        // Like: create like document & increment creator likes count
         const likeDocId = `${user.uid}_${memeId}`;
-        await setDoc(doc(db, "saves", likeDocId), {
+        await setDoc(doc(db, "likes", likeDocId), {
           user_id: user.uid,
           meme_id: memeId,
           created_at: serverTimestamp()
         });
-        await updateDoc(statsRef, {
+        await setDoc(statsRef, {
           total_likes_received: increment(1)
+        }, { merge: true });
+        await updateDoc(memeRef, {
+          likes_count: increment(1)
         });
       }
     } catch (e) {
       console.error("Like toggle failed", e);
+    } finally {
+      // Clear block
+      setLikePendingMap(prev => ({ ...prev, [memeId]: false }));
     }
   };
 
@@ -359,6 +539,7 @@ const Library = () => {
     try {
       await runTransaction(db, async (transaction) => {
         const ratingDoc = await transaction.get(ratingRef);
+        const existingData = ratingDoc.exists() ? ratingDoc.data() : {};
 
         let newRating = {
           meme_id: activeMeme.id,
@@ -367,7 +548,7 @@ const Library = () => {
           language_appropriateness: 3,
           content_validity: 3,
           creativity: 3,
-          ...userSubmittedRating,
+          ...existingData,
           [criteria]: score,
           created_at: serverTimestamp()
         };
@@ -376,9 +557,9 @@ const Library = () => {
 
         // Only increment user's ratings_provided_count if it's their first time rating this meme
         if (!ratingDoc.exists()) {
-          transaction.update(statsRef, {
+          transaction.set(statsRef, {
             ratings_provided_count: increment(1)
-          });
+          }, { merge: true });
         }
       });
     } catch (e) {
@@ -411,6 +592,35 @@ const Library = () => {
     }
   };
 
+  const handleDeleteMeme = async (memeId) => {
+    if (!window.confirm("Are you sure you want to delete this meme? This action cannot be undone.")) return;
+    try {
+      await deleteDoc(doc(db, "memes", memeId));
+      if (user) {
+        const statsDocRef = doc(db, "user_stats", user.uid);
+        await setDoc(statsDocRef, {
+          memes_created_count: increment(-1)
+        }, { merge: true });
+      }
+      setActiveMeme(null);
+      alert("Meme deleted successfully.");
+    } catch (e) {
+      console.error("Failed to delete meme", e);
+      alert("Failed to delete meme. Please try again.");
+    }
+  };
+
+  const handleDeleteComment = async (commentId) => {
+    if (!window.confirm("Are you sure you want to delete this comment?")) return;
+    try {
+      await deleteDoc(doc(db, "comments", commentId));
+      alert("Comment deleted successfully.");
+    } catch (e) {
+      console.error("Failed to delete comment", e);
+      alert("Failed to delete comment. Please try again.");
+    }
+  };
+
   // Helper to compute average criteria score
   const getAverageScore = (criteria) => {
     if (currentMemeRatings.length === 0) return 0;
@@ -420,45 +630,157 @@ const Library = () => {
 
   // Dynamic styling configurations for UDL contrast adjustments
   const containerClass = highContrastMode
-    ? "bg-black border-2 border-yellow-400 text-yellow-400"
-    : "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm rounded-xl";
+    ? "bg-zinc-900 border border-zinc-800 text-white shadow-sm rounded-xl"
+    : "bg-white border border-gray-200 shadow-sm rounded-xl";
 
   const inputClass = highContrastMode
-    ? "bg-black border border-yellow-400 text-yellow-400 placeholder-yellow-600"
-    : "w-full px-3 py-2 border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 rounded-lg text-xs";
+    ? "w-full px-3 py-2 border border-zinc-800 bg-zinc-950 rounded-lg text-xs text-white placeholder-gray-500"
+    : "w-full px-3 py-2 border border-gray-300 bg-gray-50 rounded-lg text-xs text-gray-850";
 
-  const btnClass = highContrastMode
-    ? "bg-black border-2 border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black font-bold text-xs px-3 py-1.5"
-    : "bg-purple-600 hover:bg-purple-700 text-white font-medium text-xs px-3 py-1.5 rounded-lg transition shadow-sm";
+  const btnClass = "bg-purple-600 hover:bg-purple-750 text-white font-medium text-xs px-3 py-1.5 rounded-lg transition shadow-sm";
 
   return (
     <div className="max-w-7xl mx-auto py-8 px-4">
+      <style>{`
+        .gallery-header-title {
+          background: linear-gradient(135deg, #a855f7 0%, #6366f1 100%);
+          -webkit-background-clip: text;
+          -webkit-text-fill-color: transparent;
+          background-clip: text;
+        }
 
-      {/* Page Title Header and Action buttons */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between border-b border-gray-200 dark:border-gray-850 pb-5 mb-8">
-        <div>
-          <h1 className="text-3xl font-extrabold tracking-tight">Meme Curation Gallery</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Discover and evaluate humor-based classroom assets.
+        @keyframes cardEntrance {
+          from {
+            opacity: 0;
+            transform: translateY(20px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+
+        .meme-card-animate {
+          animation: cardEntrance 0.5s cubic-bezier(0.16, 1, 0.3, 1) both;
+        }
+
+        @keyframes heartPop {
+          0% { transform: scale(1); }
+          50% { transform: scale(1.4); }
+          100% { transform: scale(1); }
+        }
+
+        .heart-pop-active {
+          animation: heartPop 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+        }
+
+        .tag-subject-maths {
+          background: linear-gradient(135deg, #ec4899 0%, #f43f5e 100%) !important;
+          color: white !important;
+          border: none !important;
+        }
+        .tag-subject-biology {
+          background: linear-gradient(135deg, #10b981 0%, #059669 100%) !important;
+          color: white !important;
+          border: none !important;
+        }
+        .tag-subject-physics {
+          background: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%) !important;
+          color: white !important;
+          border: none !important;
+        }
+        .tag-subject-chemistry {
+          background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%) !important;
+          color: white !important;
+          border: none !important;
+        }
+        .tag-subject-history {
+          background: linear-gradient(135deg, #8b5cf6 0%, #7c3aed 100%) !important;
+          color: white !important;
+          border: none !important;
+        }
+        .tag-subject-geography {
+          background: linear-gradient(135deg, #14b8a6 0%, #0d9488 100%) !important;
+          color: white !important;
+          border: none !important;
+        }
+        .tag-subject-default {
+          background: linear-gradient(135deg, #a78bfa 0%, #8b5cf6 100%) !important;
+          color: white !important;
+          border: none !important;
+        }
+      `}</style>
+
+      {/* Page Title & Search Header Section */}
+      <div className="text-center mb-10 max-w-2xl mx-auto">
+        <h1 className="text-3xl sm:text-4xl font-black tracking-tight mb-2 gallery-header-title">Meme Curation Gallery</h1>
+        <p className="text-sm text-gray-500 mb-6">
+          Discover and evaluate humor-based classroom assets.
+        </p>
+
+        {/* Search Bar Form */}
+        <form
+          onSubmit={(e) => {
+            e.preventDefault();
+            setAppliedSearchQuery(searchQuery);
+          }}
+          className="flex gap-2 items-center justify-center bg-white dark:bg-zinc-900 p-1.5 rounded-xl border border-gray-205 dark:border-zinc-800 shadow-sm focus-within:ring-2 focus-within:ring-purple-600 transition"
+        >
+          <div className="relative flex-grow flex items-center">
+            <span className="absolute left-3 text-gray-400">🔍</span>
+            <input
+              type="text"
+              placeholder="Search memes by title..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 border-0 bg-transparent text-sm focus:outline-none dark:text-white placeholder-gray-400"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearchQuery("");
+                  setAppliedSearchQuery("");
+                }}
+                className="text-gray-400 hover:text-gray-600 text-xs px-2"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <button
+            type="submit"
+            className="bg-purple-600 hover:bg-purple-750 text-white font-semibold text-xs px-5 py-2.5 rounded-lg transition"
+          >
+            Search
+          </button>
+        </form>
+
+        {appliedSearchQuery && (
+          <p className="text-[11px] text-purple-650 dark:text-purple-400 mt-2 font-semibold">
+            Showing search results for "{appliedSearchQuery}"
           </p>
-        </div>
-        <div className="mt-4 sm:mt-0 flex gap-2">
-          {user && (
-            <button
-              onClick={() => setShowDirectUploadModal(true)}
-              className={btnClass}
-            >
-              Direct Meme Upload
-            </button>
-          )}
-        </div>
+        )}
       </div>
-
       <div className="grid grid-cols-1 lg:grid-cols-4 gap-8">
 
-        {/* Left 1 Column: Filters Sidebar */}
+        {/* Left Column: Portrait Rectangle Sidebar for Sorting & Filtering */}
         <div className={`p-6 h-fit ${containerClass}`}>
-          <h2 className="text-sm font-bold uppercase tracking-wider mb-4 border-b pb-2">Filter Options</h2>
+          {/* Sorting Dropdown */}
+          <div className="mb-6">
+            <label className="block text-[11px] font-bold text-gray-400 uppercase mb-2">Sort Memes By</label>
+            <select
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className={inputClass}
+            >
+              <option value="newest">🕒 Newest Uploads</option>
+              <option value="likes">🔥 Most Popular (Likes)</option>
+              <option value="rating">⭐ Highest Rated</option>
+            </select>
+          </div>
+
+          <h2 className="text-xs font-bold uppercase tracking-wider mb-4 border-b pb-2">Filter Options</h2>
           <div className="space-y-4">
             <div>
               <label className="block text-[11px] font-semibold text-gray-400 uppercase mb-1">Subject</label>
@@ -522,13 +844,15 @@ const Library = () => {
               </select>
             </div>
 
-            {(subjectFilter || gradeFilter || languageFilter || formatFilter) && (
+            {(subjectFilter || gradeFilter || languageFilter || formatFilter || appliedSearchQuery) && (
               <button
                 onClick={() => {
                   setSubjectFilter("");
                   setGradeFilter("");
                   setLanguageFilter("");
                   setFormatFilter("");
+                  setSearchQuery("");
+                  setAppliedSearchQuery("");
                 }}
                 className="w-full text-center text-xs font-semibold text-red-650 hover:underline pt-2"
               >
@@ -536,6 +860,18 @@ const Library = () => {
               </button>
             )}
           </div>
+
+          {/* Direct Upload Option */}
+          {user && (
+            <div className="mt-8 border-t pt-4">
+              <button
+                onClick={() => setShowDirectUploadModal(true)}
+                className={`${btnClass} w-full`}
+              >
+                Direct Meme Upload
+              </button>
+            </div>
+          )}
         </div>
 
         {/* Right 3 Columns: Grid Curation Cards */}
@@ -544,10 +880,10 @@ const Library = () => {
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
               {filteredMemes.map((meme) => {
                 const isLiked = !!userLikesMap[meme.id];
-                const creatorName = meme.creator_id === "admin" ? "Admin" : (userCache[meme.creator_id] || "Creator");
+                const creatorName = meme.creator_id === "admin" ? "Admin" : (userCache[meme.creator_id]?.name || "Creator");
 
                 return (
-                  <div key={meme.id} className={`flex flex-col h-full overflow-hidden transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-md ${containerClass}`}>
+                  <div key={meme.id} className={`flex flex-col h-full overflow-hidden transition-all duration-300 ease-in-out hover:-translate-y-1.5 hover:shadow-xl hover:ring-2 hover:ring-purple-500/20 meme-card-animate ${containerClass}`}>
 
                     {/* Visual Media Preview Box */}
                     <div
@@ -602,7 +938,7 @@ const Library = () => {
 
                         {/* Curriculum Tag Pills */}
                         <div className="flex flex-wrap gap-1.5 mb-4">
-                          <span className="bg-purple-50 dark:bg-purple-950/20 text-purple-750 dark:text-purple-300 text-[10px] px-2 py-0.5 rounded-full font-bold">
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-bold shadow-sm ${getSubjectTagClass(meme.subject)}`}>
                             {meme.subject}
                           </span>
                           <span className="bg-indigo-50 dark:bg-indigo-950/20 text-indigo-750 dark:text-indigo-300 text-[10px] px-2 py-0.5 rounded-full font-bold">
@@ -615,6 +951,34 @@ const Library = () => {
                             {meme.format}
                           </span>
                         </div>
+
+                        {/* Pedagogical Category Averages Panel */}
+                        <div className="grid grid-cols-3 gap-1 bg-gray-50 dark:bg-zinc-900 p-2 rounded-lg text-[9px] mb-3 leading-tight border border-gray-100 dark:border-zinc-800">
+                          <div className="text-center">
+                            <span className="block text-gray-400 font-semibold uppercase">Age Appr.</span>
+                            <span className="font-extrabold text-purple-700 dark:text-purple-400">
+                              {getMemeAverageRating(meme.id, "age_appropriateness") > 0 
+                                ? `${getMemeAverageRating(meme.id, "age_appropriateness").toFixed(1)}/5` 
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="text-center border-x border-gray-250 dark:border-zinc-800">
+                            <span className="block text-gray-400 font-semibold uppercase">Language</span>
+                            <span className="font-extrabold text-purple-700 dark:text-purple-400">
+                              {getMemeAverageRating(meme.id, "language_appropriateness") > 0 
+                                ? `${getMemeAverageRating(meme.id, "language_appropriateness").toFixed(1)}/5` 
+                                : "—"}
+                            </span>
+                          </div>
+                          <div className="text-center">
+                            <span className="block text-gray-400 font-semibold uppercase">Validity</span>
+                            <span className="font-extrabold text-purple-700 dark:text-purple-400">
+                              {getMemeAverageRating(meme.id, "content_validity") > 0 
+                                ? `${getMemeAverageRating(meme.id, "content_validity").toFixed(1)}/5` 
+                                : "—"}
+                            </span>
+                          </div>
+                        </div>
                       </div>
 
                       {/* Card Lower Controls Tray */}
@@ -623,10 +987,10 @@ const Library = () => {
                           {/* Like Heart Button */}
                           <button
                             onClick={() => handleLikeToggle(meme.id, meme.creator_id)}
-                            className={`flex items-center space-x-1 ${isLiked ? 'text-red-500 font-bold' : 'text-gray-400 hover:text-gray-500'}`}
+                            className={`flex items-center space-x-1 transition-all ${isLiked ? 'text-red-500 font-bold' : 'text-gray-400 hover:text-gray-500'} ${animatingHeartMemeId === meme.id ? 'heart-pop-active' : ''}`}
                           >
-                            <span>{isLiked ? "❤️" : "🤍"}</span>
-                            <span>Like</span>
+                            <span className="inline-block">{isLiked ? "❤️" : "🤍"}</span>
+                            <span>{meme.likes_count || 0} Likes</span>
                           </button>
 
                           {/* Flag Report Button */}
@@ -654,16 +1018,27 @@ const Library = () => {
                           </button>
                         </div>
 
-                        {/* Edit/Remix Button (shown only if template_id exists) */}
-                        {meme.template_id && (
+                        {/* Edit/Remix or Use as Template Buttons */}
+                        <div className="flex items-center space-x-2">
+                          {meme.template_id ? (
+                            <button
+                              onClick={() => navigate(`/lab?templateId=${meme.template_id}&templateUrl=${meme.media_url}&format=${meme.format}`)}
+                              className="text-[10px] font-bold text-purple-650 hover:underline flex items-center space-x-1"
+                              title="Remix this meme"
+                            >
+                              <span>🌀</span>
+                              <span>Remix</span>
+                            </button>
+                          ) : null}
                           <button
-                            onClick={() => navigate(`/lab?templateId=${meme.template_id}&templateUrl=${meme.media_url}&format=${meme.format}`)}
-                            className="text-[10px] font-bold text-purple-650 hover:underline flex items-center space-x-1"
+                            onClick={() => navigate(`/lab?templateUrl=${encodeURIComponent(meme.media_url)}&format=${meme.format}&clearText=true`)}
+                            className="text-[10px] font-bold text-indigo-600 hover:underline flex items-center space-x-1"
+                            title="Use as Template"
                           >
-                            <span>🌀</span>
-                            <span>Remix</span>
+                            <span>🎨</span>
+                            <span>Use as Template</span>
                           </button>
-                        )}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -712,7 +1087,29 @@ const Library = () => {
                 )}
               </div>
 
-              {/* Download Action Trigger */}
+              {/* Creator details and potential Delete option */}
+              <div className="flex justify-between items-center mb-4 text-xs font-semibold text-gray-500">
+                <div className="flex items-center space-x-2">
+                  <button
+                    onClick={() => openUserModal(activeMeme.creator_id)}
+                    className="hover:underline text-purple-750"
+                  >
+                    By {activeMeme.creator_id === "admin" ? "Admin" : (userCache[activeMeme.creator_id]?.name || "Creator")}
+                  </button>
+                  <span>•</span>
+                  <span>❤️ {activeMeme.likes_count || 0} Likes</span>
+                </div>
+                {user && (activeMeme.creator_id === user.uid || profile?.role === "admin") && (
+                  <button
+                    onClick={() => handleDeleteMeme(activeMeme.id)}
+                    className="text-red-500 hover:text-red-750 hover:underline transition"
+                  >
+                    Delete Meme
+                  </button>
+                )}
+              </div>
+
+              {/* Download & Use as Template Action Triggers */}
               <div className="flex gap-2 mb-4">
                 <button
                   onClick={() => {
@@ -722,31 +1119,53 @@ const Library = () => {
                       handleMediaDownload(activeMeme.media_url, activeMeme.title);
                     }
                   }}
-                  className="w-full bg-purple-50 dark:bg-purple-950/20 text-purple-750 dark:text-purple-300 font-bold py-2 rounded-lg border border-purple-200 dark:border-purple-800 text-xs flex items-center justify-center space-x-1.5 hover:bg-purple-100 transition"
+                  className="flex-1 bg-purple-50 dark:bg-purple-950/20 text-purple-750 dark:text-purple-300 font-bold py-2 rounded-lg border border-purple-200 dark:border-purple-800 text-xs flex items-center justify-center space-x-1.5 hover:bg-purple-100 transition"
                 >
                   <span>📥</span>
-                  <span>Download Meme with CC License & Watermark</span>
+                  <span>Download</span>
+                </button>
+                <button
+                  onClick={() => navigate(`/lab?templateUrl=${encodeURIComponent(activeMeme.media_url)}&format=${activeMeme.format}&clearText=true`)}
+                  className="flex-1 bg-indigo-50 dark:bg-indigo-950/20 text-indigo-750 dark:text-indigo-300 font-bold py-2 rounded-lg border border-indigo-200 dark:border-indigo-800 text-xs flex items-center justify-center space-x-1.5 hover:bg-indigo-100 transition"
+                >
+                  <span>🎨</span>
+                  <span>Use as Template</span>
                 </button>
               </div>
 
               {/* Criteria Progress evaluation bars */}
               <div className="space-y-3 bg-gray-50 dark:bg-gray-900 p-4 rounded-xl text-xs font-semibold">
-                <span className="block uppercase tracking-wider text-gray-400 text-[10px] mb-2">Pedagogical Evaluation Grades</span>
+                <div className="flex justify-between items-center pb-2 border-b border-gray-200 dark:border-gray-800 mb-2">
+                  <span className="uppercase tracking-wider text-gray-400 text-[10px]">Pedagogical Evaluation Grades</span>
+                  {(() => {
+                    const ageAvg = getAverageScore("age_appropriateness");
+                    const langAvg = getAverageScore("language_appropriateness");
+                    const valAvg = getAverageScore("content_validity");
+                    const activeAverages = [ageAvg, langAvg, valAvg].filter(a => a > 0);
+                    const overallAverage = activeAverages.length > 0 
+                      ? activeAverages.reduce((a, b) => a + b, 0) / activeAverages.length 
+                      : 0;
+                    return (
+                      <span className="text-purple-650 font-bold text-xs bg-purple-50 dark:bg-purple-950/20 px-2 py-0.5 rounded">
+                        Avg: {overallAverage > 0 ? `${overallAverage.toFixed(1)}/5` : "—"}
+                      </span>
+                    );
+                  })()}
+                </div>
 
                 {[
                   { label: "Age Appropriateness", key: "age_appropriateness" },
                   { label: "Language Appropriateness", key: "language_appropriateness" },
-                  { label: "Content Validity", key: "content_validity" },
-                  { label: "Creativity", key: "creativity" }
+                  { label: "Content Validity", key: "content_validity" }
                 ].map((crit) => {
                   const avg = getAverageScore(crit.key);
                   const myVal = userSubmittedRating?.[crit.key] || 0;
 
                   return (
-                    <div key={crit.key} className="space-y-1">
+                    <div key={crit.key} className="space-y-1 min-h-[70px]">
                       <div className="flex justify-between text-[11px]">
                         <span>{crit.label}</span>
-                        <span className="text-purple-650">{avg > 0 ? `${avg.toFixed(1)} / 5` : "Unrated"}</span>
+                        <span className="text-purple-650">{avg > 0 ? `${avg.toFixed(1)} / 5` : "— / 5"}</span>
                       </div>
 
                       {/* Progress Bar representing average */}
@@ -759,7 +1178,7 @@ const Library = () => {
 
                       {/* Active Star Selector submission */}
                       {user && (
-                        <div className="flex space-x-1.5 pt-0.5 justify-end">
+                        <div className="flex space-x-1.5 pt-0.5 justify-end h-5">
                           {[1, 2, 3, 4, 5].map((star) => (
                             <button
                               key={star}
@@ -778,11 +1197,11 @@ const Library = () => {
               </div>
             </div>
 
-            {/* Right Column: Expert comments & Remix workflows */}
+            {/* Right Column: Verified reviews & comments */}
             <div className="flex flex-col justify-between h-full">
               <div className="flex justify-between items-start mb-4">
                 <div className="flex items-center space-x-2">
-                  <h3 className="font-extrabold text-sm uppercase tracking-wider">Expert Reviews</h3>
+                  <h3 className="font-extrabold text-sm uppercase tracking-wider">Verified Reviews</h3>
                   {expertComments.length > 0 && (
                     <span className="bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded border border-emerald-200 dark:border-emerald-800 flex items-center space-x-1">
                       <span>🛡️</span>
@@ -801,28 +1220,58 @@ const Library = () => {
               {/* Expert scholarly Comments block */}
               <div className="flex-grow space-y-4 overflow-y-auto mb-6 max-h-[40vh] border border-gray-150 dark:border-gray-750 rounded-lg p-4 bg-gray-50 dark:bg-gray-900">
                 {expertComments.length > 0 ? (
-                  expertComments.map((comment) => (
-                    <div key={comment.id} className="border-b border-gray-200 dark:border-gray-800 pb-3 last:border-b-0 text-xs">
-                      <div className="flex justify-between text-gray-500 mb-1">
-                        <span className="font-bold text-purple-750">🛡️ Certified Expert Review</span>
-                        <span>{comment.timestamp?.seconds ? new Date(comment.timestamp.seconds * 1000).toLocaleDateString() : "Just now"}</span>
-                      </div>
-                      <p className="text-gray-800 dark:text-gray-200 font-medium leading-relaxed">{comment.body}</p>
-                    </div>
-                  ))
+                  (() => {
+                    const verifiedComments = expertComments.filter(comment => {
+                      const commenter = userCache[comment.user_id];
+                      return commenter?.role === "expert" || commenter?.role === "admin" || commenter?.is_verified === true || comment.user_id === "admin";
+                    });
+
+                    if (verifiedComments.length === 0) {
+                      return (
+                        <p className="text-center text-gray-450 dark:text-gray-500 text-xs py-8">
+                          No verified reviews have been logged for this meme's subject area yet.
+                        </p>
+                      );
+                    }
+
+                    return verifiedComments.map((comment) => {
+                      const commenter = userCache[comment.user_id];
+                      const commenterName = commenter?.name || "Verified Reviewer";
+                      const isCommentAuthor = user && (comment.user_id === user.uid || profile?.role === "admin");
+                      return (
+                        <div key={comment.id} className="border-b border-gray-200 dark:border-gray-800 pb-3 last:border-b-0 text-xs">
+                          <div className="flex justify-between items-center text-gray-500 mb-1">
+                            <span className="font-bold text-purple-750">🛡️ Verified Review ({commenterName})</span>
+                            <div className="flex items-center space-x-2">
+                              <span>{comment.timestamp?.seconds ? new Date(comment.timestamp.seconds * 1000).toLocaleDateString() : "Just now"}</span>
+                              {isCommentAuthor && (
+                                <button
+                                  onClick={() => handleDeleteComment(comment.id)}
+                                  className="text-red-500 hover:text-red-700 font-bold transition ml-2"
+                                >
+                                  Delete
+                                </button>
+                              )}
+                            </div>
+                          </div>
+                          <p className="text-gray-800 dark:text-gray-200 font-medium leading-relaxed">{comment.body}</p>
+                        </div>
+                      );
+                    });
+                  })()
                 ) : (
                   <p className="text-center text-gray-450 dark:text-gray-500 text-xs py-8">
-                    No expert reviews have been logged for this meme's subject area yet.
+                    No verified reviews have been logged for this meme's subject area yet.
                   </p>
                 )}
               </div>
 
-              {/* Expert Only Submission Area */}
-              {user && profile && (profile.role === "expert" || profile.role === "admin") ? (
+              {/* Expert & Verified User Submission Area */}
+              {user && profile && (profile.role === "expert" || profile.role === "admin" || profile.is_verified === true) ? (
                 <form onSubmit={handleExpertCommentSubmit} className="space-y-3 border-t pt-4">
-                  <span className="block text-xs font-semibold text-purple-750 uppercase">🛡️ Add Academic Review (Expert Only)</span>
+                  <span className="block text-xs font-semibold text-purple-750 uppercase">🛡️ Add Verification Review</span>
                   <textarea
-                    placeholder="Write a scholarly verification review on the content validity and accuracy..."
+                    placeholder="Write a verification review or academic comment on content validity..."
                     value={newExpertComment}
                     onChange={(e) => setNewExpertComment(e.target.value)}
                     rows="3"
@@ -835,7 +1284,7 @@ const Library = () => {
                 </form>
               ) : (
                 <div className="border-t pt-4 text-center text-xs text-gray-400">
-                  🔒 Comments are restricted to verified subject-matter experts.
+                  🔒 Comments are restricted to verified users and subject-matter experts.
                 </div>
               )}
             </div>
@@ -847,7 +1296,7 @@ const Library = () => {
       {/* 3. DIRECT MEME UPLOAD MODAL */}
       {showDirectUploadModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 rounded-xl ${containerClass}`}>
+          <div className={`w-full max-w-md p-6 rounded-xl overflow-y-auto max-h-[90vh] ${containerClass}`}>
             <h2 className="text-lg font-bold mb-2">Direct Meme Upload</h2>
             <p className="text-xs text-gray-500 mb-6">
               Skip the editor canvas and upload a finished image meme directly from your device storage.

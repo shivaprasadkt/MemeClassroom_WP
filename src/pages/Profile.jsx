@@ -14,12 +14,20 @@ import {
   addDoc,
   serverTimestamp
 } from "firebase/firestore";
-import { db } from "../firebase";
+import { db, storage } from "../firebase";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useAuth } from "../context/AuthContext";
 import { useUdl } from "../context/UdlContext";
 
 const MILESTONES = [0, 1, 5, 10, 25, 50];
 const LEVEL_NAMES = ["None", "Bronze", "Silver", "Gold", "Platinum", "Diamond"];
+
+const getBadgeIcon = (level) => {
+  if (level >= 5) return "/diamond.png";
+  if (level >= 3) return "/trophy.png";
+  if (level >= 1) return "/medal.png";
+  return "/medal.png";
+};
 
 const CATEGORY_NAMES = {
   content_creator: { label: "Content Creator Medal", statKey: "memes_created_count" },
@@ -47,6 +55,8 @@ const Profile = () => {
   });
 
   const [earnedBadges, setEarnedBadges] = useState([]);
+  const [showAvatarModal, setShowAvatarModal] = useState(false);
+  const [avatarLoading, setAvatarLoading] = useState(false);
 
   // Meme Lists
   const [myMemes, setMyMemes] = useState([]);
@@ -250,6 +260,43 @@ const Profile = () => {
     };
   };
 
+  const handleAvatarSelect = async (avatarUrl) => {
+    if (!user) return;
+    setAvatarLoading(true);
+    try {
+      const userRef = doc(db, "users", user.uid);
+      await updateDoc(userRef, { avatar_url: avatarUrl });
+      setShowAvatarModal(false);
+    } catch (err) {
+      console.error("Failed to update avatar", err);
+      alert("Failed to update avatar. Please try again.");
+    } finally {
+      setAvatarLoading(false);
+    }
+  };
+
+  const handleCustomAvatarUpload = async (e) => {
+    const file = e.target.files[0];
+    if (!file || !user) return;
+
+    setAvatarLoading(true);
+    try {
+      const storageRef = ref(storage, `avatars/${user.uid}_${Date.now()}`);
+      const snapshot = await uploadBytes(storageRef, file);
+      const downloadUrl = await getDownloadURL(snapshot.ref);
+
+      const userRef = doc(db, "users", user.uid);
+      await updateDoc(userRef, { avatar_url: downloadUrl });
+
+      setShowAvatarModal(false);
+    } catch (err) {
+      console.error("Failed to upload custom avatar", err);
+      alert("Failed to upload image. Please try again.");
+    } finally {
+      setAvatarLoading(false);
+    }
+  };
+
   // Watermark Downloader logic
   const downloadMemeWithWatermark = (imageUrl, title) => {
     const img = new Image();
@@ -314,14 +361,33 @@ const Profile = () => {
     }
   };
 
+  const handleDeleteMeme = async (memeId, isDraft) => {
+    if (!window.confirm(`Are you sure you want to delete this ${isDraft ? "draft" : "meme"}? This action cannot be undone.`)) {
+      return;
+    }
+    try {
+      await deleteDoc(doc(db, "memes", memeId));
+      if (!isDraft && user) {
+        const statsDocRef = doc(db, "user_stats", user.uid);
+        await updateDoc(statsDocRef, {
+          memes_created_count: increment(-1)
+        });
+      }
+      alert(`${isDraft ? "Draft" : "Meme"} deleted successfully.`);
+    } catch (e) {
+      console.error("Failed to delete meme", e);
+      alert("Failed to delete. Please try again.");
+    }
+  };
+
   const containerClass = highContrastMode
-    ? "bg-black border-2 border-yellow-400 text-yellow-400"
-    : "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm rounded-xl";
+    ? "bg-zinc-900 border border-zinc-800 text-white shadow-sm rounded-xl"
+    : "bg-white border border-gray-200 shadow-sm rounded-xl";
 
   const renderCardGrid = (items, isBookmarkTab = false) => {
     if (items.length === 0) {
       return (
-        <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl p-12 text-center text-gray-500 shadow-sm">
+        <div className={`p-12 text-center text-gray-500 ${containerClass}`}>
           <p className="text-sm font-medium">No items found in this section.</p>
         </div>
       );
@@ -376,8 +442,7 @@ const Profile = () => {
                       {[
                         { label: "Age Appr.", key: "age_appropriateness" },
                         { label: "Language", key: "language_appropriateness" },
-                        { label: "Validity", key: "content_validity" },
-                        { label: "Creativity", key: "creativity" }
+                        { label: "Validity", key: "content_validity" }
                       ].map(bar => (
                         <div key={bar.key} className="flex items-center justify-between">
                           <span>{bar.label}</span>
@@ -409,6 +474,15 @@ const Profile = () => {
                     {isBookmarkTab && (
                       <button
                         onClick={() => handleRemoveBookmark(meme.saveId)}
+                        className="text-red-500 hover:underline"
+                      >
+                        Delete
+                      </button>
+                    )}
+
+                    {!isBookmarkTab && user && (meme.creator_id === user.uid || profile?.role === "admin") && (
+                      <button
+                        onClick={() => handleDeleteMeme(meme.id, meme.visibility === "draft")}
                         className="text-red-500 hover:underline"
                       >
                         Delete
@@ -450,23 +524,37 @@ const Profile = () => {
       {profile && (
         <div className={`p-6 ${containerClass}`}>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div>
-              <div className="flex items-center space-x-2.5">
-                <h2 className="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
-                  {profile.name}
-                </h2>
-                {profile.is_verified && (
-                  <span className="text-xl" title="Verified Creator">
-                    🔵
-                  </span>
-                )}
+            <div className="flex flex-col sm:flex-row items-center gap-4">
+              <div 
+                className="relative group cursor-pointer flex-shrink-0" 
+                onClick={() => setShowAvatarModal(true)}
+                title="Click to Change Avatar"
+              >
+                <img
+                  src={profile.avatar_url || "/avatar1.png"}
+                  className="w-20 h-20 rounded-full object-cover border-4 border-purple-200 dark:border-purple-800 transition group-hover:scale-105"
+                  alt="Profile Avatar"
+                />
+                <div className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition duration-200">
+                  <span className="text-[10px] text-white font-extrabold tracking-wide uppercase text-center px-2 leading-tight">Change Avatar</span>
+                </div>
               </div>
-              <p className="text-xs font-bold uppercase tracking-wider text-purple-650 mt-1 capitalize">
-                {profile.role} • {profile.institution}
-              </p>
-              <p className="text-xs text-gray-500 mt-0.5">
-                {profile.place}, {profile.state}, {profile.country}
-              </p>
+              <div className="text-center sm:text-left">
+                <div className="flex items-center justify-center sm:justify-start space-x-2.5">
+                  <h2 className="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
+                    {profile.name}
+                  </h2>
+                  {profile.is_verified && (
+                    <img src="/verified-badge.png" className="w-5 h-5 inline-block" alt="Verified Creator" title="Verified Creator" />
+                  )}
+                </div>
+                <p className="text-xs font-bold uppercase tracking-wider text-purple-650 mt-1 capitalize">
+                  {profile.role} • {profile.institution}
+                </p>
+                <p className="text-xs text-gray-500 mt-0.5">
+                  {profile.place}, {profile.state}, {profile.country}
+                </p>
+              </div>
             </div>
 
             {profile.id_card_url && (
@@ -486,11 +574,11 @@ const Profile = () => {
       {/* 2. Scoreboard Activity Statistics Panel */}
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
         {[
-          { label: "Memes Shared", val: stats.memes_created_count, icon: <img src="research.png" alt="not" className="w-8 h-8" /> },
-          { label: "Resources Shared", val: stats.resources_contributed_count, icon: <img src="process.png" alt="not" className="w-8 h-8" /> },
-          { label: "Staffroom Posts", val: stats.staffroom_posts_count, icon: <img src="school.png" alt="not" className="w-8 h-8" /> },
-          { label: "Ratings Provided", val: stats.ratings_provided_count, icon: <img src="star.png" alt="not" className="w-8 h-8" /> },
-          { label: "Likes Received", val: stats.total_likes_received, icon: <img src="shape.png" alt="not" className="w-8 h-8" /> }
+          { label: "Memes Shared", val: stats.memes_created_count, icon: <img src="/research.png" alt="not" className="w-8 h-8 mx-auto" /> },
+          { label: "Resources Shared", val: stats.resources_contributed_count, icon: <img src="/process.png" alt="not" className="w-8 h-8 mx-auto" /> },
+          { label: "Staffroom Posts", val: stats.staffroom_posts_count, icon: <img src="/speech-bubbles.png" alt="not" className="w-8 h-8 mx-auto" /> },
+          { label: "Ratings Provided", val: stats.ratings_provided_count, icon: <img src="/star.png" alt="not" className="w-8 h-8 mx-auto" /> },
+          { label: "Likes Received", val: stats.total_likes_received, icon: <img src="/shape.png" alt="not" className="w-8 h-8 mx-auto" /> }
         ].map((stat, idx) => (
           <div key={idx} className={`p-4 text-center ${containerClass}`}>
             <span className="text-xl block mb-2">{stat.icon}</span>
@@ -512,7 +600,7 @@ const Profile = () => {
               <div key={category} className="space-y-2 border border-gray-100 dark:border-gray-800 p-3 rounded-lg bg-gray-50 dark:bg-gray-900">
                 <span className="block text-gray-400 uppercase text-[9px] truncate">{config.label}</span>
                 <div className="flex items-center space-x-1.5">
-                  <span className="text-base"><img src="gold-medal.png" alt="not" className="w-6 h-6" /></span>
+                  <span className="text-base"><img src={getBadgeIcon(progress.currentLevel)} alt="Badge icon" className="w-6 h-6" /></span>
                   <span className="font-bold text-gray-850 dark:text-gray-100">{progress.currentBadgeName}</span>
                 </div>
 
@@ -567,6 +655,97 @@ const Profile = () => {
         {activeTab === "my-drafts" && renderCardGrid(myDrafts)}
         {activeTab === "bookmarks" && renderCardGrid(bookmarkedMemes, true)}
       </div>
+
+      {/* Avatar Picker Modal */}
+      {showAvatarModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm animate-fadeIn">
+          <div className="bg-white dark:bg-gray-850 rounded-2xl max-w-md w-full p-6 shadow-2xl border border-gray-100 dark:border-gray-800 transform transition-all scale-100 overflow-y-auto max-h-[90vh]">
+            <div className="flex justify-between items-center mb-6">
+              <h3 className="text-lg font-bold text-gray-900 dark:text-white">Choose Profile Avatar</h3>
+              <button 
+                onClick={() => setShowAvatarModal(false)}
+                className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition text-lg"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-gray-500 mb-6">
+              Select one of the custom illustrations below to update your profile image across the application.
+            </p>
+
+            <div className="grid grid-cols-3 gap-4 mb-6">
+              {[
+                { url: "/avatar1.png", label: "Blonde Girl" },
+                { url: "/avatar2.png", label: "Bun Girl" },
+                { url: "/avatar3.png", label: "Overalls Girl" },
+                { url: "/avatar4.png", label: "Hoodie Boy" },
+                { url: "/avatar5.png", label: "Bearded Man" }
+              ].map((avatar) => {
+                const isSelected = profile.avatar_url === avatar.url || (!profile.avatar_url && avatar.url === "/avatar1.png");
+                return (
+                  <button
+                    key={avatar.url}
+                    onClick={() => handleAvatarSelect(avatar.url)}
+                    disabled={avatarLoading}
+                    className={`relative p-2 rounded-xl border-2 transition-all hover:scale-105 ${
+                      isSelected
+                        ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/20"
+                        : "border-gray-100 dark:border-gray-800 hover:border-purple-300 bg-gray-50 dark:bg-gray-900"
+                    }`}
+                  >
+                    <img src={avatar.url} alt={avatar.label} className="w-full h-auto rounded-lg object-cover" />
+                    {isSelected && (
+                      <span className="absolute -top-1.5 -right-1.5 bg-purple-600 text-white rounded-full p-0.5 text-[8px] font-bold w-4 h-4 flex items-center justify-center border border-white">
+                        ✓
+                      </span>
+                    )}
+                    <span className="block text-[8px] font-semibold text-gray-500 mt-1 truncate">{avatar.label}</span>
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Custom Image Upload Option */}
+            <div className="mt-2 pt-4 border-t border-gray-100 dark:border-gray-800 mb-6">
+              <span className="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-2">
+                Or upload your own image:
+              </span>
+              <div className="flex items-center gap-3">
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={handleCustomAvatarUpload}
+                  className="hidden"
+                  id="custom-avatar-upload-input"
+                  disabled={avatarLoading}
+                />
+                <label
+                  htmlFor="custom-avatar-upload-input"
+                  className="px-4 py-2 border border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-250 bg-white dark:bg-gray-800 hover:bg-gray-50 dark:hover:bg-gray-750 text-xs font-bold rounded-lg cursor-pointer transition shadow-sm inline-flex items-center gap-1.5"
+                >
+                  📁 Browse Image
+                </label>
+                {avatarLoading && (
+                  <span className="text-[10px] text-gray-400 animate-pulse font-semibold">
+                    Uploading...
+                  </span>
+                )}
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                onClick={() => setShowAvatarModal(false)}
+                className="px-4 py-2 text-xs font-bold text-gray-500 hover:text-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

@@ -203,6 +203,23 @@ const Resources = () => {
     }
   };
 
+  const handleDeleteResource = async (resId) => {
+    if (!window.confirm("Are you sure you want to delete this resource? This action cannot be undone.")) return;
+    try {
+      await deleteDoc(doc(db, "resources", resId));
+      if (user) {
+        const statsDocRef = doc(db, "user_stats", user.uid);
+        await updateDoc(statsDocRef, {
+          resources_contributed_count: increment(-1)
+        });
+      }
+      alert("Resource deleted successfully.");
+    } catch (e) {
+      console.error("Failed to delete resource", e);
+      alert("Failed to delete resource. Please try again.");
+    }
+  };
+
   // 6. Submit resource (atomic transaction increment user_stats)
   const handleResourceSubmit = async (e) => {
     e.preventDefault();
@@ -259,16 +276,14 @@ const Resources = () => {
 
   // UDL Styling classes
   const containerClass = highContrastMode 
-    ? "bg-black border-2 border-yellow-400 text-yellow-400" 
-    : "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm rounded-xl";
+    ? "bg-zinc-900 border border-zinc-800 text-white shadow-sm rounded-xl" 
+    : "bg-white border border-gray-200 shadow-sm rounded-xl";
 
-  const btnClass = highContrastMode
-    ? "bg-black border-2 border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black font-bold text-xs px-3 py-1.5"
-    : "bg-purple-600 hover:bg-purple-750 text-white font-medium text-xs px-3 py-1.5 rounded-lg transition shadow-sm";
+  const btnClass = "bg-purple-600 hover:bg-purple-750 text-white font-medium text-xs px-3 py-1.5 rounded-lg transition shadow-sm";
 
   const inputClass = highContrastMode
-    ? "bg-black border border-yellow-400 text-yellow-400 placeholder-yellow-600"
-    : "w-full px-3 py-2 border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 rounded-lg text-xs";
+    ? "w-full px-3 py-2 border border-zinc-800 bg-zinc-950 rounded-lg text-xs text-white placeholder-gray-500"
+    : "w-full px-3 py-2 border border-gray-300 bg-gray-50 rounded-lg text-xs text-gray-855";
 
   const activeFeat = MOCK_FEATURED[featuredIndex];
 
@@ -449,6 +464,18 @@ const Resources = () => {
                         >
                           🏳️ Report
                         </button>
+
+                        {/* Delete Resource Button */}
+                        {user && (res.author_id === user.uid || profile?.role === "admin") && (
+                          <button
+                            onClick={() => handleDeleteResource(res.id)}
+                            className="text-gray-400 hover:text-red-500 flex items-center space-x-1"
+                            title="Delete Resource"
+                          >
+                            <span>🗑️</span>
+                            <span>Delete</span>
+                          </button>
+                        )}
                       </div>
                       
                       {res.file_url && res.type !== "course" && (
@@ -477,7 +504,7 @@ const Resources = () => {
       {/* 3. CONTRIBUTE RESOURCE MODAL */}
       {showUploadModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 rounded-xl ${containerClass}`}>
+          <div className={`w-full max-w-md p-6 rounded-xl overflow-y-auto max-h-[90vh] ${containerClass}`}>
             <h2 className="text-lg font-bold mb-2">Contribute Resource</h2>
             <p className="text-xs text-gray-500 mb-6">
               Add research summaries, activity worksheets, or online course guides directly to the dashboard.

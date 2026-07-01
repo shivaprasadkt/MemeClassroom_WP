@@ -1,12 +1,12 @@
 import React, { useState, useEffect } from "react";
-import { collection, query, onSnapshot, getDoc, doc, addDoc, serverTimestamp } from "firebase/firestore";
+import { collection, query, onSnapshot, getDoc, doc, addDoc, serverTimestamp, deleteDoc } from "firebase/firestore";
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import { useUdl } from "../context/UdlContext";
 import { useUserModal } from "../context/UserModalContext";
 
 const MoreResources = () => {
-  const { user } = useAuth();
+  const { user, profile } = useAuth();
   const { highContrastMode } = useUdl();
   const { openUserModal } = useUserModal();
 
@@ -85,22 +85,29 @@ const MoreResources = () => {
     }
   };
 
+  const handleDeleteExternalLink = async (linkId) => {
+    if (!window.confirm("Are you sure you want to delete this external link? This action cannot be undone.")) return;
+    try {
+      await deleteDoc(doc(db, "external_links", linkId));
+      alert("External link deleted successfully.");
+    } catch (e) {
+      console.error("Failed to delete external link", e);
+      alert("Failed to delete. Please try again.");
+    }
+  };
+
   // UDL Styling classes
   const containerClass = highContrastMode
-    ? "bg-black border-2 border-yellow-400 text-yellow-400 p-5 rounded-none"
-    : "glass-panel bg-white/50 dark:bg-gray-900/60 backdrop-blur-md border border-gray-250/50 dark:border-gray-800/40 p-5 rounded-xl shadow-sm flex flex-col justify-between h-full transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-md";
+    ? "bg-zinc-900 border border-zinc-800 text-white p-5 rounded-xl shadow-sm flex flex-col justify-between h-full"
+    : "glass-panel bg-white/50 backdrop-blur-md border border-gray-250/50 p-5 rounded-xl shadow-sm flex flex-col justify-between h-full transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-md";
 
-  const btnClass = highContrastMode
-    ? "bg-black border-2 border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black font-black px-4 py-2 text-xs"
-    : "bg-purple-600 hover:bg-purple-750 text-white font-semibold px-4 py-2 rounded-lg text-xs transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-md";
+  const btnClass = "bg-purple-600 hover:bg-purple-750 text-white font-semibold px-4 py-2 rounded-lg text-xs transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-md";
 
-  const actionBtnClass = highContrastMode
-    ? "bg-black border-2 border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black font-black w-full py-2 text-xs text-center block"
-    : "bg-indigo-650 hover:bg-indigo-700 text-white font-bold w-full py-2.5 rounded-lg text-xs text-center block transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-md";
+  const actionBtnClass = "bg-indigo-650 hover:bg-indigo-700 text-white font-bold w-full py-2.5 rounded-lg text-xs text-center block transition-all duration-200 ease-in-out hover:-translate-y-0.5 hover:shadow-md";
 
   const inputClass = highContrastMode
-    ? "bg-black border border-yellow-400 text-yellow-400 placeholder-yellow-600 p-2 text-xs w-full"
-    : "w-full p-2 border border-gray-300 dark:border-gray-700 bg-gray-55 dark:bg-gray-900 rounded-lg text-xs focus:ring-2 focus:ring-purple-500 outline-none";
+    ? "w-full p-2 border border-zinc-800 bg-zinc-950 rounded-lg text-xs text-white placeholder-gray-500 outline-none"
+    : "w-full p-2 border border-gray-300 bg-gray-55 rounded-lg text-xs focus:ring-2 focus:ring-purple-500 outline-none";
 
   return (
     <div className="max-w-6xl mx-auto py-8 px-4 space-y-8">
@@ -158,7 +165,17 @@ const MoreResources = () => {
 
                   {/* Contributor badge footer */}
                   <div className="pt-2 border-t border-gray-155 dark:border-gray-750 flex items-center justify-between text-[10px] text-gray-400 font-semibold">
-                    <span>Added: {link.created_at ? new Date(link.created_at.seconds * 1000).toLocaleDateString() : "Just now"}</span>
+                    <div className="flex items-center space-x-2">
+                      <span>Added: {link.created_at ? new Date(link.created_at.seconds * 1000).toLocaleDateString() : "Just now"}</span>
+                      {user && (link.contributor_id === user.uid || profile?.role === "admin") && (
+                        <button
+                          onClick={() => handleDeleteExternalLink(link.id)}
+                          className="text-red-500 hover:text-red-700 font-bold transition ml-2"
+                        >
+                          Delete
+                        </button>
+                      )}
+                    </div>
                     <button
                       onClick={() => openUserModal(link.contributor_id)}
                       className="text-purple-650 hover:underline capitalize"
@@ -180,7 +197,7 @@ const MoreResources = () => {
       {/* Form Submission modal */}
       {showFormModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 ${highContrastMode ? 'bg-black border-2 border-yellow-400 text-yellow-400' : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-2xl rounded-xl'}`}>
+          <div className={`w-full max-w-md p-6 overflow-y-auto max-h-[90vh] ${highContrastMode ? 'bg-black border-2 border-yellow-400 text-yellow-400' : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-2xl rounded-xl'}`}>
             <h3 className="text-base font-extrabold mb-4">Contribute External Link</h3>
             
             {submitError && (

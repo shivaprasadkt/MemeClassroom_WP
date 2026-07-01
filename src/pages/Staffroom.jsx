@@ -242,6 +242,34 @@ const Staffroom = () => {
     }
   };
 
+  const handleDeleteThread = async (threadId) => {
+    if (!window.confirm("Are you sure you want to delete this thread? This action cannot be undone.")) return;
+    try {
+      await deleteDoc(doc(db, "staffroom_posts", threadId));
+      if (user) {
+        const statsDocRef = doc(db, "user_stats", user.uid);
+        await updateDoc(statsDocRef, {
+          staffroom_posts_count: increment(-1)
+        });
+      }
+      alert("Thread deleted successfully.");
+    } catch (e) {
+      console.error("Failed to delete thread", e);
+      alert("Failed to delete thread. Please try again.");
+    }
+  };
+
+  const handleDeleteReply = async (replyId) => {
+    if (!window.confirm("Are you sure you want to delete this reply?")) return;
+    try {
+      await deleteDoc(doc(db, "staffroom_replies", replyId));
+      alert("Reply deleted successfully.");
+    } catch (e) {
+      console.error("Failed to delete reply", e);
+      alert("Failed to delete reply. Please try again.");
+    }
+  };
+
   // "Accept Solution" solved logic gates
   const handleAcceptSolution = async (threadId, replyId) => {
     try {
@@ -270,20 +298,18 @@ const Staffroom = () => {
   });
 
   const containerClass = highContrastMode 
-    ? "bg-black border-2 border-yellow-400 text-yellow-400" 
-    : "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 shadow-sm rounded-xl";
+    ? "bg-zinc-900 border border-zinc-800 text-white shadow-sm rounded-xl" 
+    : "bg-white border border-gray-200 shadow-sm rounded-xl";
 
   const solvedCardClass = highContrastMode
-    ? "border-4 border-green-500 bg-black text-yellow-400"
-    : "border-2 border-emerald-500 bg-emerald-50/10 dark:bg-emerald-950/10";
+    ? "border-2 border-emerald-600 bg-emerald-950/20 text-white rounded-xl"
+    : "border-2 border-emerald-500 bg-emerald-50/10";
 
-  const btnClass = highContrastMode
-    ? "bg-black border-2 border-yellow-400 text-yellow-400 hover:bg-yellow-400 hover:text-black font-bold text-xs px-3 py-1.5"
-    : "bg-purple-600 hover:bg-purple-750 text-white font-medium text-xs px-3 py-1.5 rounded-lg transition shadow-sm";
+  const btnClass = "bg-purple-600 hover:bg-purple-750 text-white font-medium text-xs px-3 py-1.5 rounded-lg transition shadow-sm";
 
   const inputClass = highContrastMode
-    ? "bg-black border border-yellow-400 text-yellow-400 placeholder-yellow-600 text-xs"
-    : "w-full px-3 py-2 border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 rounded-lg text-xs";
+    ? "w-full px-3 py-2 border border-zinc-800 bg-zinc-950 rounded-lg text-xs text-white placeholder-gray-500"
+    : "w-full px-3 py-2 border border-gray-300 bg-gray-50 rounded-lg text-xs text-gray-850";
 
   return (
     <div className="max-w-7xl mx-auto py-8 px-4 space-y-8">
@@ -380,12 +406,22 @@ const Staffroom = () => {
                       </div>
 
                       {/* Clickable Contributor gateway link */}
-                      <button
-                        onClick={() => openUserModal(thread.author_id)}
-                        className="text-[10px] text-purple-750 font-bold hover:underline"
-                      >
-                        By {authorName}
-                      </button>
+                      <div className="flex items-center space-x-2">
+                        <button
+                          onClick={() => openUserModal(thread.author_id)}
+                          className="text-[10px] text-purple-750 font-bold hover:underline"
+                        >
+                          By {authorName}
+                        </button>
+                        {user && (thread.author_id === user.uid || profile?.role === "admin") && (
+                          <button
+                            onClick={() => handleDeleteThread(thread.id)}
+                            className="text-red-500 hover:text-red-750 text-[10px] font-bold transition ml-2"
+                          >
+                            Delete
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {/* Text Body */}
@@ -414,7 +450,10 @@ const Staffroom = () => {
                         <span>👍</span>
                         <span>{thread.likes || 0} Upvotes</span>
                       </button>
-                      <span className="text-gray-400">💬 {activeReplies.length} Replies</span>
+                      <span className="text-gray-400 flex items-center space-x-1.5">
+                        <img src="/speech-bubbles.png" className="w-3.5 h-3.5" alt="Replies" />
+                        <span>{activeReplies.length} Replies</span>
+                      </span>
                     </div>
 
                     {/* Threaded Solution replies list */}
@@ -434,12 +473,22 @@ const Staffroom = () => {
                               }`}
                             >
                               <div className="flex justify-between items-center mb-1">
-                                <button
-                                  onClick={() => openUserModal(reply.author_id)}
-                                  className="font-bold text-[10px] text-purple-650 hover:underline"
-                                >
-                                  {rAuthorName}
-                                </button>
+                                <div className="flex items-center space-x-2">
+                                  <button
+                                    onClick={() => openUserModal(reply.author_id)}
+                                    className="font-bold text-[10px] text-purple-650 hover:underline"
+                                  >
+                                    {rAuthorName}
+                                  </button>
+                                  {user && (reply.author_id === user.uid || profile?.role === "admin") && (
+                                    <button
+                                      onClick={() => handleDeleteReply(reply.id)}
+                                      className="text-red-500 hover:text-red-750 text-[10px] font-bold transition ml-2"
+                                    >
+                                      Delete
+                                    </button>
+                                  )}
+                                </div>
                                 
                                 {isAccepted ? (
                                   <span className="text-[10px] font-bold text-emerald-700 flex items-center space-x-1">
@@ -523,7 +572,7 @@ const Staffroom = () => {
       {/* 4. COMPOSE THREAD MODAL */}
       {showComposeModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 rounded-xl ${containerClass}`}>
+          <div className={`w-full max-w-md p-6 rounded-xl overflow-y-auto max-h-[90vh] ${containerClass}`}>
             <h2 className="text-lg font-bold mb-2">Compose Thread</h2>
             <p className="text-xs text-gray-500 mb-6">
               Share details of a classroom experience outcome, or ask peers a question.

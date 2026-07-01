@@ -3,6 +3,13 @@ import { doc, getDoc, collection, query, where, getDocs } from "firebase/firesto
 import { db } from "../firebase";
 import { useUdl } from "./UdlContext";
 
+const getBadgeIcon = (level) => {
+  if (level >= 5) return "/diamond.png";
+  if (level >= 3) return "/trophy.png";
+  if (level >= 1) return "/medal.png";
+  return "/medal.png";
+};
+
 const UserModalContext = createContext();
 
 export const UserModalProvider = ({ children }) => {
@@ -67,7 +74,7 @@ export const UserModalProvider = ({ children }) => {
       {/* Global User Info Box Overlay Modal */}
       {isOpen && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 ${modalClass}`}>
+          <div className={`w-full max-w-md p-6 overflow-y-auto max-h-[90vh] ${modalClass}`}>
             
             {loading ? (
               <div className="flex items-center justify-center py-12">
@@ -77,17 +84,26 @@ export const UserModalProvider = ({ children }) => {
               <div className="space-y-6">
                 
                 {/* Profile demographics header details */}
-                <div>
-                  <div className="flex items-center space-x-2">
-                    <h3 className="text-xl font-extrabold">{userData.name}</h3>
-                    {userData.is_verified && <span title="Verified User">🔵</span>}
+                <div className="flex items-center space-x-4">
+                  <img
+                    src={userData.avatar_url || "/avatar1.png"}
+                    className="w-14 h-14 rounded-full object-cover border-2 border-purple-300 dark:border-purple-700"
+                    alt={userData.name}
+                  />
+                  <div>
+                    <div className="flex items-center space-x-2">
+                      <h3 className="text-xl font-extrabold">{userData.name}</h3>
+                      {userData.is_verified && (
+                        <img src="/verified-badge.png" className="w-5 h-5 ml-1 inline-block" alt="Verified User" title="Verified User" />
+                      )}
+                    </div>
+                    <p className="text-xs font-bold uppercase tracking-wider text-purple-650 mt-1 capitalize">
+                      {userData.role} • {userData.institution}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      {userData.place}, {userData.state}, {userData.country}
+                    </p>
                   </div>
-                  <p className="text-xs font-bold uppercase tracking-wider text-purple-650 mt-1 capitalize">
-                    {userData.role} • {userData.institution}
-                  </p>
-                  <p className="text-xs text-gray-500 mt-0.5">
-                    {userData.place}, {userData.state}, {userData.country}
-                  </p>
                 </div>
 
                 {/* Milestone Badges lists */}
@@ -100,7 +116,7 @@ export const UserModalProvider = ({ children }) => {
                           key={badge.id} 
                           className="bg-purple-55 text-purple-750 dark:bg-purple-950/20 dark:text-purple-300 text-[10px] font-bold px-2 py-1 rounded border border-purple-200 dark:border-purple-800 flex items-center space-x-1"
                         >
-                          <span>🏅</span>
+                          <img src={getBadgeIcon(badge.level)} className="w-4 h-4" alt="Badge icon" />
                           <span>{badge.badge_name}</span>
                         </span>
                       ))}
