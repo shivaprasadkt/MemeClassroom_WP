@@ -4,16 +4,16 @@ import { useAuth } from "../context/AuthContext";
 import { useUdl } from "../context/UdlContext";
 
 const Auth = () => {
-  const { 
-    user, 
-    onboardingUser, 
-    signUpWithEmail, 
-    signInWithEmail, 
-    signInWithGoogle, 
-    completeGoogleOnboarding 
+  const {
+    user,
+    onboardingUser,
+    signUpWithEmail,
+    signInWithEmail,
+    signInWithGoogle,
+    completeGoogleOnboarding
   } = useAuth();
   const { highContrastMode } = useUdl();
-  
+
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
 
@@ -112,13 +112,13 @@ const Auth = () => {
     setError("");
     setLoading(true);
     try {
-      const profileData = { 
-        name: onboardingUser?.displayName || name || "Google User", 
-        role, 
-        institution, 
-        place, 
-        state, 
-        country 
+      const profileData = {
+        name: onboardingUser?.displayName || name || "Google User",
+        role,
+        institution,
+        place,
+        state,
+        country
       };
       await completeGoogleOnboarding(profileData, idCardFile);
       navigate("/profile");
@@ -130,8 +130,8 @@ const Auth = () => {
   };
 
   // Base background theme selectors based on UDL setting
-  const boxBgClass = highContrastMode 
-    ? "bg-black border-2 border-yellow-400 text-yellow-400" 
+  const boxBgClass = highContrastMode
+    ? "bg-black border-2 border-yellow-400 text-yellow-400"
     : "bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-800 dark:text-gray-100 shadow-xl";
 
   const buttonClass = highContrastMode
@@ -145,10 +145,10 @@ const Auth = () => {
   return (
     <div className="flex items-center justify-center min-h-[70vh] px-4">
       <div className={`w-full max-w-lg p-8 rounded-xl ${boxBgClass}`}>
-        
+
         {error && (
           <div className="mb-6 p-4 text-sm rounded-lg bg-red-50 dark:bg-red-950 border border-red-200 dark:border-red-800 text-red-650">
-            {error}
+            {/* {error} */} Opps! Invalid Username or Password. Please cross-verify and try again....
           </div>
         )}
 
@@ -249,21 +249,19 @@ const Auth = () => {
             <div className="flex justify-center space-x-4 mb-8 border-b border-gray-250 dark:border-gray-700 pb-4">
               <button
                 onClick={() => { setMode("login"); setError(""); }}
-                className={`pb-2 text-sm font-bold tracking-wider uppercase border-b-2 transition ${
-                  mode === "login" 
-                    ? "border-purple-600 text-purple-600 dark:text-purple-400" 
-                    : "border-transparent text-gray-400 hover:text-gray-500"
-                }`}
+                className={`pb-2 text-sm font-bold tracking-wider uppercase border-b-2 transition ${mode === "login"
+                  ? "border-purple-600 text-purple-600 dark:text-purple-400"
+                  : "border-transparent text-gray-400 hover:text-gray-500"
+                  }`}
               >
                 Sign In
               </button>
               <button
                 onClick={() => { setMode("register"); setError(""); }}
-                className={`pb-2 text-sm font-bold tracking-wider uppercase border-b-2 transition ${
-                  mode === "register" 
-                    ? "border-purple-600 text-purple-600 dark:text-purple-400" 
-                    : "border-transparent text-gray-400 hover:text-gray-500"
-                }`}
+                className={`pb-2 text-sm font-bold tracking-wider uppercase border-b-2 transition ${mode === "register"
+                  ? "border-purple-600 text-purple-600 dark:text-purple-400"
+                  : "border-transparent text-gray-400 hover:text-gray-500"
+                  }`}
               >
                 Register
               </button>
@@ -442,11 +440,10 @@ const Auth = () => {
             <button
               onClick={handleGoogleSignIn}
               disabled={loading}
-              className={`w-full flex items-center justify-center space-x-2 border py-2.5 rounded-lg transition duration-200 ${
-                highContrastMode 
-                  ? 'border-yellow-400 bg-black text-yellow-400 hover:bg-yellow-400 hover:text-black font-bold' 
-                  : 'border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-850'
-              }`}
+              className={`w-full flex items-center justify-center space-x-2 border py-2.5 rounded-lg transition duration-200 ${highContrastMode
+                ? 'border-yellow-400 bg-black text-yellow-400 hover:bg-yellow-400 hover:text-black font-bold'
+                : 'border-gray-300 dark:border-gray-700 text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-900 hover:bg-gray-50 dark:hover:bg-gray-850'
+                }`}
             >
               <svg className="h-5 w-5" viewBox="0 0 24 24" fill="currentColor">
                 <path d="M12.24 10.285V14.4h6.887c-.648 2.41-2.519 4.114-5.136 4.114-3.51 0-6.386-2.876-6.386-6.386 0-3.51 2.876-6.386 6.386-6.386 1.63 0 3.09.617 4.2 1.638l3.125-3.125C18.6 1.848 15.683 1 12.24 1 6.032 1 1 6.032 1 12.24s5.032 11.24 11.24 11.24c6.478 0 11.24-4.558 11.24-11.24 0-.79-.085-1.543-.243-1.954H12.24z" />

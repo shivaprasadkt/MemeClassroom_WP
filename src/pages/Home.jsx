@@ -12,7 +12,7 @@ const Home = () => {
           Learning + Humour
         </span>
       </div>
-
+      {/* bg-gradient-to-r from-purple-400 via-indigo-400 to-blue-400 */}
       <h1 className="text-4xl md:text-6xl font-black tracking-tight mb-6 bg-gradient-to-r from-purple-700 via-indigo-650 to-cyan-600 bg-clip-text text-transparent leading-tight">
         MemeClassroom
       </h1>
