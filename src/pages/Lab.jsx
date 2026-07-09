@@ -21,8 +21,10 @@ import { MEDIA_SAMPLES } from "../constants/mediaSamples";
 import { SUBJECTS, GRADE_GROUPS } from "../constants/taxonomy";
 import { trackCustomSubmission } from "../utils/taxonomyUtils";
 import { useUndoRedo } from "../hooks/useUndoRedo";
+import { useVideoTrim } from "../hooks/useVideoTrim";
 import LibraryPickerModal from "../components/LibraryPickerModal";
 import GiphySearch from "../components/GiphySearch";
+import AudiogramCanvas from "../components/AudiogramCanvas";
 import html2canvas from "html2canvas";
 
 
@@ -169,6 +171,15 @@ const Lab = () => {
             }
           } else if (data.format === "video") {
             setVideoUrl(data.media_url || "");
+            // Restore captions if saved
+            if (data.captions_json) {
+              try {
+                const parsedCaptions = JSON.parse(data.captions_json);
+                if (Array.isArray(parsedCaptions)) {
+                  setVideoCaptions(parsedCaptions.map(c => `${c.time} – ${c.text}`).join("\n"));
+                }
+              } catch { /* ignore malformed captions */ }
+            }
           } else if (data.format === "gif") {
             setGifUrl(data.media_url || "");
           } else if (data.format === "audio") {
@@ -239,6 +250,8 @@ const Lab = () => {
   const [videoDuration, setVideoDuration] = useState(15);
   const [videoTrimStart, setVideoTrimStart] = useState(0);
   const [videoTrimEnd, setVideoTrimEnd] = useState(15);
+  // Phase 2E: timed captions — one per line, format: "0:02 – Caption text"
+  const [videoCaptions, setVideoCaptions] = useState("");
 
   // --- GIF Tab State ---
   const [gifUrl, setGifUrl] = useState(MEDIA_SAMPLES?.gif?.[0]?.url || "");
@@ -307,6 +320,16 @@ const Lab = () => {
   const [alertMessage, setAlertMessage] = useState("");
   const [autoSaveToast, setAutoSaveToast] = useState("");
   const [loading, setLoading] = useState(false);
+
+  // --- Week 6: ffmpeg.wasm trim state ---
+  const [isTrimming, setIsTrimming] = useState(false);
+  const [ffmpegProgress, setFfmpegProgress] = useState(0); // 0–1
+  const { trimVideo } = useVideoTrim();
+
+  // --- Week 7: Audiogram card customisation state ---
+  const [audiogramBgColor, setAudiogramBgColor] = useState("#1e1b4b");
+  const [audiogramAccentColor, setAudiogramAccentColor] = useState("#a78bfa");
+  const audiogramRef = useRef(null); // ref to AudiogramCanvas instance
 
   // --- Template Upload Pipeline State ---
   const [templateTitle, setTemplateTitle] = useState("");
@@ -590,7 +613,26 @@ const Lab = () => {
     };
   }, [audioTrimStart, audioTrimEnd, audioUrl, activeTab]);
 
+  // --- Phase 2E: Caption line parser ---
+  // Converts the human-readable textarea format into a structured array.
+  // Input:  "0:02 – Caption text\n0:06 – Another caption"
+  // Output: [{ time: 2, text: "Caption text" }, { time: 6, text: "Another caption" }]
+  const parseCaptionLines = (raw = "") => {
+    return raw
+      .split("\n")
+      .map(line => {
+        // Allow both dash variants: – (em-dash) and - (hyphen)
+        const match = line.match(/^(\d+):(\d+)\s*[–\-]\s*(.+)$/);
+        if (!match) return null;
+        const minutes = parseInt(match[1], 10);
+        const seconds = parseInt(match[2], 10);
+        return { time: minutes * 60 + seconds, text: match[3].trim() };
+      })
+      .filter(Boolean);
+  };
+
   // --- Background Auto-Save Worker (30 Seconds) ---
+
   useEffect(() => {
     if (!user) return;
 
@@ -612,6 +654,8 @@ const Lab = () => {
           // media_urls_json persists all collage images (up to 4) so drafts fully restore
           media_urls_json: activeTab === "image" ? JSON.stringify(images) : "[]",
           text_layers_json: JSON.stringify(textLayers),
+          // Phase 2E: persist video captions
+          captions_json: activeTab === "video" ? JSON.stringify(parseCaptionLines(videoCaptions)) : "[]",
           template_id: templateId || "",
           updated_at: serverTimestamp()
         };
@@ -870,19 +914,64 @@ const Lab = () => {
             }
           }
         } else if (activeTab === "video") {
-          const a = document.createElement("a");
-          a.download = `${title.trim() || "video_meme"}.mp4`;
-          a.href = videoUrl;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
+          // Week 6: real ffmpeg.wasm trim for download-only flow
+          if (videoFile && window.crossOriginIsolated) {
+            try {
+              setIsTrimming(true);
+              setFfmpegProgress(0);
+              const trimmedBlob = await trimVideo(videoFile, videoTrimStart, videoTrimEnd, (p) => setFfmpegProgress(p));
+              const url = URL.createObjectURL(trimmedBlob);
+              const a = document.createElement("a");
+              a.download = `${title.trim() || "video_meme"}.mp4`;
+              a.href = url;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            } finally {
+              setIsTrimming(false);
+            }
+          } else {
+            // Fallback: download raw video (no trim) — handles sample URLs and non-isolated browsers
+            const a = document.createElement("a");
+            a.download = `${title.trim() || "video_meme"}.mp4`;
+            a.href = videoUrl;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
         } else if (activeTab === "audio") {
-          const a = document.createElement("a");
-          a.download = `${title.trim() || "audio_meme"}.mp3`;
-          a.href = audioUrl;
-          document.body.appendChild(a);
-          a.click();
-          document.body.removeChild(a);
+          // Week 7: download the audiogram card PNG for audio memes
+          if (audiogramRef.current) {
+            try {
+              const cardBlob = await audiogramRef.current.generateCardBlob();
+              if (cardBlob) {
+                const url = URL.createObjectURL(cardBlob);
+                const a = document.createElement("a");
+                a.download = `${title.trim() || "audio_meme"}_card.png`;
+                a.href = url;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              }
+            } catch (_) {
+              // Fallback to raw audio download
+              const a = document.createElement("a");
+              a.download = `${title.trim() || "audio_meme"}.mp3`;
+              a.href = audioUrl;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            }
+          } else {
+            const a = document.createElement("a");
+            a.download = `${title.trim() || "audio_meme"}.mp3`;
+            a.href = audioUrl;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
         }
         setShowSaveModal(false);
       } catch (err) {
@@ -936,33 +1025,81 @@ const Lab = () => {
           URL.revokeObjectURL(downloadUrl);
         }
       } 
-      // 2. Upload video file to Storage if uploaded manually
+      // 2. Week 6: Real ffmpeg.wasm trim → upload trimmed video to Storage
       else if (activeTab === "video" && videoFile) {
-        const storageRef = ref(storage, `memes/${user.uid}_meme_${Date.now()}`);
-        const snapshot = await uploadBytes(storageRef, videoFile);
+        let videoBlob = videoFile; // default: upload as-is
+
+        if (window.crossOriginIsolated) {
+          try {
+            setIsTrimming(true);
+            setFfmpegProgress(0);
+            videoBlob = await trimVideo(
+              videoFile,
+              videoTrimStart,
+              videoTrimEnd,
+              (p) => setFfmpegProgress(p)
+            );
+          } catch (trimErr) {
+            console.warn("ffmpeg trim failed, falling back to original file:", trimErr);
+          } finally {
+            setIsTrimming(false);
+          }
+        } else {
+          // Not cross-origin-isolated — inform user but continue upload
+          console.warn("crossOriginIsolated is false — uploading original video without trim.");
+        }
+
+        const storageRef = ref(storage, `memes/${user.uid}_meme_${Date.now()}.mp4`);
+        const snapshot = await uploadBytes(storageRef, videoBlob);
         fileUrl = await getDownloadURL(snapshot.ref);
 
-        // Local download of the video file
+        // Local download of trimmed video
+        const trimmedUrl = URL.createObjectURL(videoBlob);
         const link = document.createElement("a");
         link.download = `${title.trim() || 'meme'}.mp4`;
-        link.href = videoUrl;
+        link.href = trimmedUrl;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        URL.revokeObjectURL(trimmedUrl);
       } 
-      // 3. Upload audio file to Storage if uploaded manually
-      else if (activeTab === "audio" && audioFile) {
-        const storageRef = ref(storage, `memes/${user.uid}_meme_${Date.now()}`);
-        const snapshot = await uploadBytes(storageRef, audioFile);
-        fileUrl = await getDownloadURL(snapshot.ref);
+      // 3. Week 7: Generate audiogram PNG card → upload as the meme's media_url
+      else if (activeTab === "audio") {
+        // Step A: upload the raw audio file so QR code can point to it
+        let audioFileUrl = audioUrl;
+        if (audioFile) {
+          const audioStorageRef = ref(storage, `memes/${user.uid}_audio_${Date.now()}`);
+          const audioSnapshot = await uploadBytes(audioStorageRef, audioFile);
+          audioFileUrl = await getDownloadURL(audioSnapshot.ref);
+        }
 
-        // Local download of the audio file
-        const link = document.createElement("a");
-        link.download = `${title.trim() || 'meme'}.mp3`;
-        link.href = audioUrl;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        // Step B: generate audiogram PNG card
+        if (audiogramRef.current) {
+          try {
+            // Pass the now-public audioFileUrl so the QR code is embeddable
+            const cardBlob = await audiogramRef.current.generateCardBlob();
+            if (cardBlob) {
+              const cardStorageRef = ref(storage, `memes/${user.uid}_audiogram_${Date.now()}.png`);
+              const cardSnapshot = await uploadBytes(cardStorageRef, cardBlob);
+              fileUrl = await getDownloadURL(cardSnapshot.ref); // audiogram PNG becomes media_url
+
+              // Local download of the card PNG
+              const downloadUrl = URL.createObjectURL(cardBlob);
+              const link = document.createElement("a");
+              link.download = `${title.trim() || 'audio_meme'}_card.png`;
+              link.href = downloadUrl;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(downloadUrl);
+            }
+          } catch (cardErr) {
+            console.warn("Audiogram card generation failed, using raw audio URL:", cardErr);
+            fileUrl = audioFileUrl;
+          }
+        } else {
+          fileUrl = audioFileUrl;
+        }
       }
       // 4. Download local GIF file if it is loaded, using html2canvas to merge text overlays
       else if (activeTab === "gif") {
@@ -1019,6 +1156,8 @@ const Lab = () => {
         // media_urls_json preserves all collage image URLs for display in Library
         media_urls_json: activeTab === "image" ? JSON.stringify(images) : "[]",
         text_layers_json: JSON.stringify(textLayers),
+        // Phase 2E: persist parsed captions so the Library player can render them
+        captions_json: activeTab === "video" ? JSON.stringify(parseCaptionLines(videoCaptions)) : "[]",
         template_id: templateId || "",
         created_at: serverTimestamp()
       };
@@ -1154,6 +1293,23 @@ const Lab = () => {
       {autoSaveToast && (
         <div className="fixed bottom-4 right-4 z-50 bg-gray-900 text-white text-xs px-4 py-2 rounded-lg shadow-lg border border-gray-700 animate-pulse">
           💾 {autoSaveToast}
+        </div>
+      )}
+
+      {/* Week 6: ffmpeg.wasm real-trim progress overlay */}
+      {isTrimming && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-purple-700 rounded-2xl px-8 py-6 flex flex-col items-center gap-4 shadow-2xl min-w-[280px]">
+            <div className="text-3xl animate-bounce">✂️</div>
+            <p className="text-white font-bold text-sm">Trimming video…</p>
+            <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-purple-500 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${Math.round(ffmpegProgress * 100)}%` }}
+              />
+            </div>
+            <p className="text-gray-400 text-xs">{Math.round(ffmpegProgress * 100)}% — this may take 15–30 seconds</p>
+          </div>
         </div>
       )}
 
@@ -1448,6 +1604,17 @@ const Lab = () => {
                         </span>
                       )}
                     </div>
+
+                    {/* Week 6: Browser compatibility warning for ffmpeg.wasm */}
+                    {!window.crossOriginIsolated && (
+                      <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+                        <span className="text-sm shrink-0">⚠️</span>
+                        <p className="text-[10px] leading-relaxed">
+                          <strong>Real video trimming unavailable.</strong> Your browser or server lacks Cross-Origin Isolation.
+                          Trimming works best on Chrome/Edge. The video will upload without applying the trim.
+                        </p>
+                      </div>
+                    )}
                     
                     <div className="space-y-4">
                       {/* Premium Dashed-Border Upload Dropzone */}
@@ -1531,6 +1698,27 @@ const Lab = () => {
                               className="w-full accent-purple-650 h-1 bg-gray-250 rounded-lg cursor-pointer mt-1"
                             />
                           </div>
+                        </div>
+
+                        {/* Phase 2E: Video Captions textarea */}
+                        <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
+                          <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5 text-gray-550">
+                            Timed Captions
+                          </label>
+                          <p className="text-[10px] text-gray-400 mb-2 leading-relaxed">
+                            One caption per line. Format: <code className="bg-gray-100 dark:bg-zinc-800 px-1 rounded">0:02 – Caption text</code>
+                          </p>
+                          <textarea
+                            value={videoCaptions}
+                            onChange={(e) => setVideoCaptions(e.target.value)}
+                            placeholder={`0:01 – Title of this video\n0:05 – Key concept here\n0:10 – Summary or punchline`}
+                            rows={5}
+                            className={`w-full text-xs rounded-lg border px-3 py-2 font-mono resize-y focus:outline-none focus:ring-2 focus:ring-purple-500 ${
+                              highContrastMode
+                                ? "bg-zinc-900 border-zinc-700 text-white placeholder-zinc-600"
+                                : "bg-white border-gray-200 text-gray-800 placeholder-gray-400"
+                            }`}
+                          />
                         </div>
                       </div>
                     )}
@@ -2469,17 +2657,50 @@ const Lab = () => {
                 )}
 
                 {activeTab === "audio" && (
-                  <div className="w-full h-full flex flex-col items-center justify-center bg-gray-950 p-6 text-center text-white">
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-gray-950 p-4 gap-3 overflow-y-auto">
                     {audioUrl ? (
                       <>
-                        <div className="text-4xl mb-3 animate-pulse">🎵</div>
-                        <p className="text-xs font-semibold mb-4 text-purple-455 uppercase tracking-wider">Audio Waveform Container</p>
+                        {/* Week 7: Live audiogram card preview */}
+                        <AudiogramCanvas
+                          ref={audiogramRef}
+                          audioFile={audioFile}
+                          audioUrl={audioUrl}
+                          title={title || "Untitled Audio Meme"}
+                          subject={subject === "Other" ? (customSubject || "General") : subject}
+                          creatorName={profile?.displayName || user?.email || "MemeClassroom"}
+                          bgColor={audiogramBgColor}
+                          accentColor={audiogramAccentColor}
+                        />
+                        {/* Audio player for trimming preview */}
                         <audio 
                           ref={audioPlayerRef}
                           src={audioUrl} 
                           controls 
-                          className="w-full max-w-xs" 
+                          className="w-full max-w-xs mt-1" 
                         />
+                        {/* Card colour controls */}
+                        <div className="flex items-center gap-4 text-white text-[10px] font-bold">
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <span className="uppercase tracking-wide">Card BG</span>
+                            <input
+                              type="color"
+                              value={audiogramBgColor}
+                              onChange={(e) => setAudiogramBgColor(e.target.value)}
+                              className="w-6 h-6 rounded cursor-pointer border-0 p-0 bg-transparent"
+                              title="Audiogram background colour"
+                            />
+                          </label>
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <span className="uppercase tracking-wide">Waveform</span>
+                            <input
+                              type="color"
+                              value={audiogramAccentColor}
+                              onChange={(e) => setAudiogramAccentColor(e.target.value)}
+                              className="w-6 h-6 rounded cursor-pointer border-0 p-0 bg-transparent"
+                              title="Waveform bar colour"
+                            />
+                          </label>
+                        </div>
                       </>
                     ) : (
                       <div className="flex flex-col items-center justify-center p-8 text-center text-gray-400 w-full h-full bg-slate-955/10">
@@ -2490,7 +2711,7 @@ const Lab = () => {
                         </div>
                         <p className="font-bold text-sm mb-1 text-gray-700 dark:text-gray-300">Audio Workspace Empty</p>
                         <p className="text-xs text-gray-500 max-w-xs">
-                          Upload background MP3 audio files or load a pre-set sample to enable audio output.
+                          Upload an MP3/audio file or load a sample — a shareable audiogram card will be generated automatically.
                         </p>
                       </div>
                     )}

@@ -749,6 +749,69 @@ const Library = () => {
 
   const btnClass = "bg-purple-600 hover:bg-purple-750 text-white font-medium text-xs px-3 py-1.5 rounded-lg transition shadow-sm";
 
+  /**
+   * VideoWithCaptions — renders a <video> with timed text captions overlaid.
+   * Reads captions_json (array of { time, text }) from the meme document and
+   * shows the matching caption as a subtitle bar at the bottom of the player.
+   */
+  const VideoWithCaptions = ({ meme }) => {
+    const vidRef = React.useRef(null);
+    const [activeCaption, setActiveCaption] = React.useState("");
+
+    // Parse captions once from the Firestore field
+    const captions = React.useMemo(() => {
+      if (!meme?.captions_json) return [];
+      try {
+        const parsed = JSON.parse(meme.captions_json);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }, [meme?.captions_json]);
+
+    React.useEffect(() => {
+      const video = vidRef.current;
+      if (!video || captions.length === 0) return;
+
+      const handleTimeUpdate = () => {
+        const t = video.currentTime;
+        // Find the last caption whose time is <= current time
+        let matched = "";
+        for (const cap of captions) {
+          if (cap.time <= t) matched = cap.text;
+        }
+        setActiveCaption(matched);
+      };
+
+      video.addEventListener("timeupdate", handleTimeUpdate);
+      return () => video.removeEventListener("timeupdate", handleTimeUpdate);
+    }, [captions]);
+
+    return (
+      <div className="relative w-full h-full flex items-center justify-center">
+        <video
+          ref={vidRef}
+          src={meme.media_url}
+          controls
+          className="max-w-full max-h-full"
+        />
+        {activeCaption && (
+          <div
+            className="absolute bottom-8 left-0 right-0 flex justify-center pointer-events-none px-4"
+            aria-live="polite"
+          >
+            <span
+              className="bg-black/75 text-white text-sm font-semibold px-4 py-1.5 rounded-lg shadow-lg max-w-[90%] text-center leading-snug"
+              style={{ textShadow: "0 1px 3px rgba(0,0,0,0.9)" }}
+            >
+              {activeCaption}
+            </span>
+          </div>
+        )}
+      </div>
+    );
+  };
+
   return (
     <div className="max-w-7xl mx-auto py-8 px-4">
 
@@ -1258,7 +1321,7 @@ const Library = () => {
                   <img src={activeMeme.media_url} alt={activeMeme.title} className="max-w-full max-h-full object-contain" />
                 )}
                 {activeMeme.format === "video" && (
-                  <video src={activeMeme.media_url} controls className="max-w-full max-h-full" />
+                  <VideoWithCaptions meme={activeMeme} />
                 )}
                 {activeMeme.format === "gif" && (
                   <img src={activeMeme.media_url} alt={activeMeme.title} className="max-w-full max-h-full object-contain" />
