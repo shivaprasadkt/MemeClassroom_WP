@@ -37,7 +37,19 @@ const ADMIN_CACHE_ENTRY = {
 };
 
 // ── Emoji reactions config ────────────────────────────────────────────────────
-const REACTION_EMOJIS = ["❤️", "🔥", "💡", "🎉", "😮"];
+const REACTION_EMOJIS = ["👍", "❤️", "💡", "👏", "🔥", "😮"];
+
+const getReactionStyle = (emoji) => {
+  switch (emoji) {
+    case "👍": return { label: "Like", className: "text-blue-600 dark:text-blue-450 font-bold" };
+    case "❤️": return { label: "Love", className: "text-red-500 dark:text-red-400 font-bold" };
+    case "💡": return { label: "Insightful", className: "text-amber-500 dark:text-amber-450 font-bold" };
+    case "👏": return { label: "Celebrate", className: "text-green-600 dark:text-green-450 font-bold" };
+    case "🔥": return { label: "Fire", className: "text-orange-500 dark:text-orange-450 font-bold" };
+    case "😮": return { label: "Amazed", className: "text-purple-500 dark:text-purple-450 font-bold" };
+    default: return { label: "Like", className: "text-gray-500 dark:text-gray-400 hover:text-purple-650" };
+  }
+};
 
 // ── Skeleton card placeholder ─────────────────────────────────────────────────
 const SkeletonCard = () => (
@@ -1000,10 +1012,10 @@ const Staffroom = () => {
 
   // Engagement micro-bar
   const renderEngagementBar = (thread) => {
-    const likes = thread.likes || 0;
+    const totalReactions = Object.values(thread.reactions || {}).reduce((s, v) => s + (v || 0), 0);
     const rCount = (replies[thread.id] || []).length;
     const pollVotes = Object.values(thread.poll_votes || {}).reduce((s, v) => s + (v || 0), 0);
-    const total = likes + rCount + pollVotes;
+    const total = totalReactions + rCount + pollVotes;
     const score = Math.min(100, Math.round((total / 10) * 100));
     const color = score < 30 ? "from-gray-300 to-gray-400" : score < 60 ? "from-amber-400 to-orange-400" : "from-purple-500 to-indigo-500";
     return (
@@ -1076,7 +1088,10 @@ const Staffroom = () => {
       const aAnn = a.is_announcement ? 1 : 0;
       const bAnn = b.is_announcement ? 1 : 0;
       if (aAnn !== bAnn) return bAnn - aAnn;
-      if (sortMode === "upvoted") return (b.likes || 0) - (a.likes || 0);
+      if (sortMode === "upvoted") {
+        const getReactionsCount = (t) => Object.values(t.reactions || {}).reduce((s, v) => s + (v || 0), 0);
+        return getReactionsCount(b) - getReactionsCount(a);
+      }
       if (sortMode === "discussed") {
         return ((replies[b.id] || []).length) - ((replies[a.id] || []).length);
       }
@@ -1565,42 +1580,74 @@ const Staffroom = () => {
                       </div>
                     ) : null}
 
-                    {/* Actions row */}
-                    <div className="flex items-center justify-between border-t border-gray-100 dark:border-gray-700/50 pt-3 text-xs mt-3">
-                      <div className="flex items-center space-x-3">
-                        {/* Upvote */}
-                        <button
-                          onClick={() => handleThreadLike(thread)}
-                          className={`flex items-center space-x-1.5 transition ${
-                            user && (thread.liked_by || []).includes(user.uid)
-                              ? "text-purple-600 font-bold"
-                              : "text-gray-400 hover:text-purple-650"
-                          }`}
-                        >
-                          <span>👍</span>
-                          <span>{thread.likes || 0}</span>
-                        </button>
+                    {/* LinkedIn-style Reaction and Reply summary */}
+                    {(totalReactions > 0 || activeReplies.length > 0) && (
+                      <div className="flex items-center justify-between border-t border-gray-100/70 dark:border-gray-700/30 pt-2.5 mt-3 text-[11px] text-gray-500">
+                        <div className="flex items-center space-x-1">
+                          {totalReactions > 0 && (
+                            <div className="flex items-center space-x-1">
+                              <div className="flex -space-x-1">
+                                {Object.entries(thread.reactions || {})
+                                  .filter(([_, count]) => count > 0)
+                                  .sort((a, b) => b[1] - a[1])
+                                  .slice(0, 3)
+                                  .map(([emoji]) => (
+                                    <span key={emoji} className="inline-flex items-center justify-center text-[10px] w-5 h-5 rounded-full bg-white dark:bg-zinc-900 shadow-sm border border-gray-100 dark:border-zinc-800">
+                                      {emoji}
+                                    </span>
+                                  ))}
+                              </div>
+                              <span className="font-bold text-gray-655 dark:text-gray-300">{totalReactions}</span>
+                            </div>
+                          )}
+                        </div>
+                        <div className="text-gray-455 dark:text-gray-500 font-semibold">
+                          <span>{activeReplies.length} {activeReplies.length === 1 ? "reply" : "replies"}</span>
+                        </div>
+                      </div>
+                    )}
 
-                        {/* Emoji reaction button */}
-                        <div className="relative">
+                    {/* Actions row */}
+                    <div className="flex items-center justify-between border-t border-gray-100 dark:border-gray-700/50 pt-2 text-xs mt-2">
+                      <div className="flex items-center space-x-3">
+                        {/* LinkedIn Reactions Button */}
+                        <div 
+                          className="relative group/react"
+                          onMouseEnter={() => setReactionMenuOpen((p) => ({ ...p, [thread.id]: true }))}
+                          onMouseLeave={() => setReactionMenuOpen((p) => ({ ...p, [thread.id]: false }))}
+                        >
                           <button
-                            onClick={() => setReactionMenuOpen((p) => ({ ...p, [thread.id]: !p[thread.id] }))}
-                            className={`flex items-center gap-1 transition text-gray-400 hover:text-purple-650 ${myReaction ? "font-bold text-purple-600" : ""}`}
-                            title="React to this post"
+                            onClick={() => {
+                              if (!user) {
+                                toast("Please log in to react.", "warning");
+                                return;
+                              }
+                              if (myReaction) {
+                                handleReaction(thread.id, myReaction);
+                              } else {
+                                handleReaction(thread.id, "👍");
+                              }
+                            }}
+                            className={`flex items-center space-x-1.5 transition px-2.5 py-1 rounded-lg hover:bg-gray-150 dark:hover:bg-zinc-850 ${
+                              getReactionStyle(myReaction).className
+                            }`}
                           >
-                            <span>{myReaction || "🙂"}</span>
-                            {totalReactions > 0 && <span>{totalReactions}</span>}
+                            <span>{myReaction || "👍"}</span>
+                            <span>{getReactionStyle(myReaction).label}</span>
                           </button>
+
+                          {/* Reaction picker */}
                           {reactionMenuOpen[thread.id] && (
-                            <div
-                              className="absolute bottom-8 left-0 z-20 flex gap-1 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-xl shadow-lg p-2"
+                            <div 
+                              className="absolute bottom-full left-0 mb-1 z-30 flex items-center gap-1.5 bg-white dark:bg-zinc-900 border border-gray-200 dark:border-zinc-700 rounded-full shadow-xl px-3 py-1.5"
                               style={{ animation: "scaleIn 0.15s ease-out" }}
                             >
                               {REACTION_EMOJIS.map((emoji) => (
                                 <button
                                   key={emoji}
                                   onClick={() => handleReaction(thread.id, emoji)}
-                                  className={`text-lg hover:scale-125 transition-transform p-1 rounded ${myReaction === emoji ? "bg-purple-100 dark:bg-purple-950" : ""}`}
+                                  className="text-lg hover:scale-130 active:scale-95 transition-transform p-0.5 rounded-full hover:bg-gray-100 dark:hover:bg-zinc-800"
+                                  title={getReactionStyle(emoji).label}
                                 >
                                   {emoji}
                                 </button>
@@ -1611,7 +1658,7 @@ const Staffroom = () => {
 
                         <span className="text-gray-400 flex items-center space-x-1.5">
                           <span>💬</span>
-                          <span>{activeReplies.length} {activeReplies.length === 1 ? "Reply" : "Replies"}</span>
+                          <span>Reply</span>
                         </span>
                       </div>
 

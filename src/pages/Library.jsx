@@ -1120,7 +1120,7 @@ const Library = () => {
                       {/* Creator Profile Overlay - Social Media Style */}
                       <div 
                         onClick={(e) => { e.stopPropagation(); openUserModal(meme.creator_id); }}
-                        className="absolute top-3 left-3 z-10 flex items-center space-x-1.5 bg-black/55 backdrop-blur-md px-2.5 py-1.2 rounded-full border border-white/10 shadow-sm transition hover:bg-black/75 cursor-pointer select-none"
+                        className="absolute top-3 left-3 z-20 flex items-center space-x-1.5 bg-black/55 backdrop-blur-md px-2.5 py-1.2 rounded-full border border-white/10 shadow-sm transition hover:bg-black/75 cursor-pointer select-none"
                       >
                         <img
                           src={userCache[meme.creator_id]?.avatar_url || "/avatar1.png"}
@@ -1129,6 +1129,16 @@ const Library = () => {
                         />
                         <span className="text-[10px] font-bold text-white/90 truncate max-w-[80px]">
                           {creatorName}
+                        </span>
+                      </div>
+
+                      {/* Hover View Details Overlay */}
+                      <div 
+                        onClick={() => setActiveMeme(meme)}
+                        className="absolute inset-0 bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-200 cursor-pointer z-10"
+                      >
+                        <span className="bg-white/90 dark:bg-zinc-900/90 text-gray-900 dark:text-white px-3.5 py-1.5 rounded-full text-[10px] font-bold shadow-md hover:scale-105 transition-transform flex items-center gap-1">
+                          👁️ View Details
                         </span>
                       </div>
 
