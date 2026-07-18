@@ -567,8 +567,8 @@ const Profile = () => {
         <div className={`p-6 ${containerClass}`}>
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
             <div className="flex flex-col sm:flex-row items-center gap-4">
-              <div 
-                className="relative group cursor-pointer flex-shrink-0" 
+              <div
+                className="relative group cursor-pointer flex-shrink-0"
                 onClick={() => setShowAvatarModal(true)}
                 title="Click to Change Avatar"
               >
@@ -586,8 +586,9 @@ const Profile = () => {
                   <h2 className="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
                     {profile.name}
                   </h2>
+                  {/* verify badge  */}
                   {profile.is_verified && (
-                    <img src="/verified-badge.png" className="w-5 h-5 inline-block" alt="Verified Creator" title="Verified Creator" />
+                    <img src="/badge-verify.png" className="w-7 h-7 inline-block" alt="Verified Creator" title="Verified Creator" />
                   )}
                 </div>
                 <p className="text-xs font-bold uppercase tracking-wider text-purple-650 mt-1 capitalize">
@@ -704,7 +705,7 @@ const Profile = () => {
           <div className="bg-white dark:bg-gray-850 rounded-2xl max-w-md w-full p-6 shadow-2xl border border-gray-100 dark:border-gray-800 transform transition-all scale-100 overflow-y-auto max-h-[90vh]">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-lg font-bold text-gray-900 dark:text-white">Choose Profile Avatar</h3>
-              <button 
+              <button
                 onClick={() => setShowAvatarModal(false)}
                 className="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition text-lg"
               >
@@ -730,11 +731,10 @@ const Profile = () => {
                     key={avatar.url}
                     onClick={() => handleAvatarSelect(avatar.url)}
                     disabled={avatarLoading}
-                    className={`relative p-2 rounded-xl border-2 transition-all hover:scale-105 ${
-                      isSelected
-                        ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/20"
-                        : "border-gray-100 dark:border-gray-800 hover:border-purple-300 bg-gray-50 dark:bg-gray-900"
-                    }`}
+                    className={`relative p-2 rounded-xl border-2 transition-all hover:scale-105 ${isSelected
+                      ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/20"
+                      : "border-gray-100 dark:border-gray-800 hover:border-purple-300 bg-gray-50 dark:bg-gray-900"
+                      }`}
                   >
                     <img src={avatar.url} alt={avatar.label} className="w-full h-auto rounded-lg object-cover" />
                     {isSelected && (

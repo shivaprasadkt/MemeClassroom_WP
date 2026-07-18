@@ -33,4 +33,5 @@ Ensure you have **Node.js** (v18+ recommended) and the **Firebase CLI** installe
 ### 1. Clone the Repository
 ```bash
 git clone [https://github.com/oergroup2026/MemeClassroom_WP.git](https://github.com/oergroup2026/MemeClassroom_WP.git)
+
 cd MemeClassroom_WP

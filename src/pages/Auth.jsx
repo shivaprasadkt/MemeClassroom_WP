@@ -72,6 +72,11 @@ const Auth = () => {
       return "Internet issue: Please check your connection and try again.";
     }
 
+    // Check if provider is not enabled
+    if (code === "auth/operation-not-allowed") {
+      return "Google Sign-In is not enabled for this project. Please enable it in your Firebase Console (Authentication > Sign-in method).";
+    }
+
     // Check if credentials wrong
     if (
       code === "auth/invalid-credential" ||
@@ -451,6 +456,7 @@ const Auth = () => {
                 >
                   {loading ? "Registering Account..." : "Create Account"}
                 </button>
+                <p className="bg-white dark:bg-gray-800 px-2 text-gray-400 text-sm text-center">Did Once? Click on SignIn to get started!</p>
               </form>
             )}
 
