@@ -1,18 +1,18 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { 
   collection, 
   addDoc, 
   doc, 
   getDoc,
+  getDocs,
   setDoc, 
   serverTimestamp, 
   updateDoc,
   increment,
   query,
   where,
-  onSnapshot,
-  runTransaction
+  onSnapshot
 } from "firebase/firestore";
 import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { db, storage } from "../firebase";
@@ -20,58 +20,37 @@ import { useAuth } from "../context/AuthContext";
 import { useUdl } from "../context/UdlContext";
 import { MEDIA_SAMPLES } from "../constants/mediaSamples";
 import { SUBJECTS, GRADE_GROUPS } from "../constants/taxonomy";
+import { trackCustomSubmission } from "../utils/taxonomyUtils";
+import { useUndoRedo } from "../hooks/useUndoRedo";
+import { useVideoTrim } from "../hooks/useVideoTrim";
+import LibraryPickerModal from "../components/LibraryPickerModal";
+import GiphySearch from "../components/GiphySearch";
+import AudiogramCanvas from "../components/AudiogramCanvas";
+import { useToast } from "../components/ToastNotification";
+import html2canvas from "html2canvas";
 
-const trackCustomSubmission = async (type, name) => {
-  if (!name || !name.trim()) return;
-  const cleanName = name.trim();
-  const docId = `${type}_${cleanName.toLowerCase()}`;
-  const counterRef = doc(db, "custom_counts", docId);
-  const taxRef = doc(db, "configs", "taxonomy");
-
-  try {
-    await runTransaction(db, async (transaction) => {
-      const counterSnap = await transaction.get(counterRef);
-      let count = 1;
-      if (counterSnap.exists()) {
-        count = (counterSnap.data().count || 0) + 1;
-      }
-      transaction.set(counterRef, { name: cleanName, count, type }, { merge: true });
-
-      if (count >= 10) {
-        const taxSnap = await transaction.get(taxRef);
-        if (taxSnap.exists()) {
-          const taxData = taxSnap.data();
-          if (type === "subject") {
-            const subjects = taxData.subjects || [];
-            const exists = subjects.some(s => s.toLowerCase() === cleanName.toLowerCase());
-            if (!exists) {
-              const otherIdx = subjects.indexOf("Other");
-              if (otherIdx !== -1) {
-                subjects.splice(otherIdx, 0, cleanName);
-              } else {
-                subjects.push(cleanName);
-              }
-              transaction.update(taxRef, { subjects });
-            }
-          } else if (type === "language") {
-            const languages = taxData.languages || [];
-            const exists = languages.some(l => l.toLowerCase() === cleanName.toLowerCase());
-            if (!exists) {
-              const otherIdx = languages.indexOf("Other");
-              if (otherIdx !== -1) {
-                languages.splice(otherIdx, 0, cleanName);
-              } else {
-                languages.push(cleanName);
-              }
-              transaction.update(taxRef, { languages });
-            }
-          }
-        }
-      }
-    });
-  } catch (err) {
-    console.error("Error tracking custom submission", err);
-  }
+// ── Format tab icon map ───────────────────────────────────────────────────────
+const TAB_ICONS = {
+  image: (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" />
+    </svg>
+  ),
+  video: (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
+    </svg>
+  ),
+  gif: (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M14.828 14.828a4 4 0 01-5.656 0M9 10h.01M15 10h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+    </svg>
+  ),
+  audio: (
+    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
+    </svg>
+  ),
 };
 
 const Lab = () => {
@@ -131,7 +110,11 @@ const Lab = () => {
   const handleSelectTemplate = (temp) => {
     setTemplateId(temp.id);
     if (temp.format === "image" || !temp.format) {
-      setImages([temp.media_url]);
+      if (images.length >= 4) {
+        setAlertMessage("You can only add up to 4 images to the collage.");
+        return;
+      }
+      setImages(prev => [...prev, temp.media_url]);
       setActiveTab("image");
     } else if (temp.format === "video") {
       setVideoUrl(temp.media_url);
@@ -199,9 +182,29 @@ const Lab = () => {
           setActiveTab(data.format || "image");
 
           if (data.format === "image") {
-            setImages(data.media_url ? [data.media_url] : []);
+            // Restore all collage images from media_urls_json (new field),
+            // falling back to the legacy single media_url for older drafts.
+            if (data.media_urls_json) {
+              try {
+                const parsedUrls = JSON.parse(data.media_urls_json);
+                setImages(Array.isArray(parsedUrls) && parsedUrls.length > 0 ? parsedUrls : (data.media_url ? [data.media_url] : []));
+              } catch {
+                setImages(data.media_url ? [data.media_url] : []);
+              }
+            } else {
+              setImages(data.media_url ? [data.media_url] : []);
+            }
           } else if (data.format === "video") {
             setVideoUrl(data.media_url || "");
+            // Restore captions if saved
+            if (data.captions_json) {
+              try {
+                const parsedCaptions = JSON.parse(data.captions_json);
+                if (Array.isArray(parsedCaptions)) {
+                  setVideoCaptions(parsedCaptions.map(c => `${c.time} – ${c.text}`).join("\n"));
+                }
+              } catch { /* ignore malformed captions */ }
+            }
           } else if (data.format === "gif") {
             setGifUrl(data.media_url || "");
           } else if (data.format === "audio") {
@@ -230,7 +233,41 @@ const Lab = () => {
   // --- Image Tab State ---
   const [images, setImages] = useState([]); // Array of base64/object URLs
   const [imageFiles, setImageFiles] = useState([]); // Array of raw File objects
-  const [collageLayout, setCollageLayout] = useState("grid"); // "grid" | "vertical" | "horizontal"
+
+  // Collage layout format: "columns" | "rows" | "grid"
+  const [collageLayout, setCollageLayout] = useState("columns");
+
+  // Proportional values for Columns/Rows splits
+  const [panelSizes, setPanelSizes] = useState([1, 1, 1, 1]);
+
+  // Proportions for Grid split: top-to-bottom height ratio (y), top width ratio (topX), bottom width ratio (bottomX)
+  const [gridSplit, setGridSplit] = useState({ y: 0.5, topX: 0.5, bottomX: 0.5 });
+
+  // Drag-resize state for collage dividers
+  const collageDragRef = useRef({ 
+    active: false, 
+    type: "", 
+    dividerIdx: 0, 
+    startX: 0, 
+    startY: 0, 
+    startSizes: [], 
+    startSplit: {} 
+  });
+
+  // Reset panelSizes & gridSplit to equal distribution whenever image count changes
+  useEffect(() => {
+    setPanelSizes([1, 1, 1, 1]);
+    setGridSplit({ y: 0.5, topX: 0.5, bottomX: 0.5 });
+    // Reset layout to columns if less than 4 images
+    if (images.length < 4 && collageLayout === "grid") {
+      setCollageLayout("columns");
+    }
+  }, [images.length]);
+
+  const removeImage = (idx) => {
+    setImages(prev => prev.filter((_, i) => i !== idx));
+    setImageFiles(prev => prev.filter((_, i) => i !== idx));
+  };
 
   // --- Video Tab State ---
   const [videoUrl, setVideoUrl] = useState(MEDIA_SAMPLES?.video?.[0]?.url || "");
@@ -238,9 +275,13 @@ const Lab = () => {
   const [videoDuration, setVideoDuration] = useState(15);
   const [videoTrimStart, setVideoTrimStart] = useState(0);
   const [videoTrimEnd, setVideoTrimEnd] = useState(15);
+  // Phase 2E: timed captions — one per line, format: "0:02 – Caption text"
+  const [videoCaptions, setVideoCaptions] = useState("");
 
   // --- GIF Tab State ---
   const [gifUrl, setGifUrl] = useState(MEDIA_SAMPLES?.gif?.[0]?.url || "");
+  const [gifFile, setGifFile] = useState(null);
+  const [showLibraryPickerModal, setShowLibraryPickerModal] = useState(false);
 
   // --- Audio Tab State ---
   const [audioUrl, setAudioUrl] = useState(MEDIA_SAMPLES?.audio?.[0]?.url || "");
@@ -248,20 +289,38 @@ const Lab = () => {
   const [audioTrimStart, setAudioTrimStart] = useState(0);
   const [audioTrimEnd, setAudioTrimEnd] = useState(15);
 
-  // --- Text Overlay State ---
-  const [textLayers, setTextLayers] = useState([
-    {
-      id: "txt-1",
-      text: "Double click to edit",
-      x: 150,
-      y: 100,
-      fontSize: 28,
-      color: "#FFFFFF",
-      fontFamily: "Impact",
-      strokeColor: "#000000",
-      strokeWidth: 2
-    }
-  ]);
+  // --- Text Overlay State (with undo/redo history) ---
+  const DEFAULT_LAYER = {
+    id: "txt-1",
+    text: "Double click to edit",
+    x: 150,
+    y: 100,
+    fontSize: 28,
+    color: "#FFFFFF",
+    fontFamily: "Impact",
+    strokeColor: "#000000",
+    strokeWidth: 2,
+    textAlign: "left",
+    opacity: 1,
+    rotation: 0,
+    maxWidth: null,
+  };
+
+  const {
+    state: textLayers,
+    set: setTextLayersWithHistory,
+    undo: undoTextLayers,
+    redo: redoTextLayers,
+    canUndo,
+    canRedo,
+  } = useUndoRedo([DEFAULT_LAYER]);
+
+  // Convenience wrapper that also accepts functional updaters
+  const setTextLayers = useCallback((updater) => {
+    setTextLayersWithHistory(prev =>
+      typeof updater === "function" ? updater(prev) : updater
+    );
+  }, [setTextLayersWithHistory]);
   const [selectedTextId, setSelectedTextId] = useState(null);
   const [editingTextId, setEditingTextId] = useState(null);
 
@@ -287,12 +346,32 @@ const Lab = () => {
   const [autoSaveToast, setAutoSaveToast] = useState("");
   const [loading, setLoading] = useState(false);
 
+  // --- Week 6: ffmpeg.wasm trim state ---
+  const [isTrimming, setIsTrimming] = useState(false);
+  const [ffmpegProgress, setFfmpegProgress] = useState(0); // 0–1
+  const { trimVideo } = useVideoTrim();
+
+  // --- Week 7: Audiogram card customisation state ---
+  const [audiogramBgColor, setAudiogramBgColor] = useState("#1e1b4b");
+  const [audiogramAccentColor, setAudiogramAccentColor] = useState("#a78bfa");
+  const audiogramRef = useRef(null); // ref to AudiogramCanvas instance
+
   // --- Template Upload Pipeline State ---
   const [templateTitle, setTemplateTitle] = useState("");
   const [templateFile, setTemplateFile] = useState(null);
   const [templateLoading, setTemplateLoading] = useState(false);
   const [templateSuccess, setTemplateSuccess] = useState("");
   const [availableTemplates, setAvailableTemplates] = useState([]);
+  const [showContributeModal, setShowContributeModal] = useState(false);
+
+  // --- Meme Story State ---
+  const [memeStoryModal, setMemeStoryModal] = useState({ open: false, story: null, template: null, loading: false });
+  const [storyExpanded, setStoryExpanded] = useState(false);
+  // Contribute story fields (inside contribute template modal)
+  const [includeStory, setIncludeStory] = useState(false);
+  const [storyOrigin, setStoryOrigin] = useState("");
+  const [storyUsageContext, setStoryUsageContext] = useState("");
+  const [storyEducationalUse, setStoryEducationalUse] = useState("");
 
   // Refs
   const canvasContainerRef = useRef(null);
@@ -327,6 +406,12 @@ const Lab = () => {
         if (audioFile && audioFile.type.startsWith("audio/")) {
           setAudioUrl(createObjectURLSafe(audioFile));
           setAudioFile(audioFile);
+        }
+      } else if (activeTab === "gif") {
+        const gFile = files[0];
+        if (gFile && gFile.type === "image/gif") {
+          setGifUrl(createObjectURLSafe(gFile));
+          setGifFile(gFile);
         }
       }
     }
@@ -470,7 +555,11 @@ const Lab = () => {
         color: "#FFFFFF",
         fontFamily: "Impact",
         strokeColor: "#000000",
-        strokeWidth: 2
+        strokeWidth: 2,
+        textAlign: "left",
+        opacity: 1,
+        rotation: 0,
+        maxWidth: null,
       }
     ]);
     setSelectedTextId(newId);
@@ -493,6 +582,30 @@ const Lab = () => {
     setTextLayers(prev => prev.filter(layer => layer.id !== selectedTextId));
     setSelectedTextId(null);
   };
+
+  const duplicateSelectedText = () => {
+    if (!selectedTextId) return;
+    const layer = textLayers.find(l => l.id === selectedTextId);
+    if (!layer) return;
+    const newId = `txt-${Date.now()}`;
+    setTextLayers(prev => [...prev, { ...layer, id: newId, x: layer.x + 20, y: layer.y + 20 }]);
+    setSelectedTextId(newId);
+  };
+
+  // Keyboard Undo/Redo handler
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "z" && !e.shiftKey) {
+        e.preventDefault();
+        undoTextLayers();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.key === "z" && e.shiftKey))) {
+        e.preventDefault();
+        redoTextLayers();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [undoTextLayers, redoTextLayers]);
 
   // Video trim preview loop
   useEffect(() => {
@@ -534,7 +647,26 @@ const Lab = () => {
     };
   }, [audioTrimStart, audioTrimEnd, audioUrl, activeTab]);
 
+  // --- Phase 2E: Caption line parser ---
+  // Converts the human-readable textarea format into a structured array.
+  // Input:  "0:02 – Caption text\n0:06 – Another caption"
+  // Output: [{ time: 2, text: "Caption text" }, { time: 6, text: "Another caption" }]
+  const parseCaptionLines = (raw = "") => {
+    return raw
+      .split("\n")
+      .map(line => {
+        // Allow both dash variants: – (em-dash) and - (hyphen)
+        const match = line.match(/^(\d+):(\d+)\s*[–\-]\s*(.+)$/);
+        if (!match) return null;
+        const minutes = parseInt(match[1], 10);
+        const seconds = parseInt(match[2], 10);
+        return { time: minutes * 60 + seconds, text: match[3].trim() };
+      })
+      .filter(Boolean);
+  };
+
   // --- Background Auto-Save Worker (30 Seconds) ---
+
   useEffect(() => {
     if (!user) return;
 
@@ -553,7 +685,11 @@ const Lab = () => {
           keywords: parsedKeywords,
           visibility: "draft",
           media_url: activeTab === "image" ? (images[0] || "") : activeTab === "video" ? videoUrl : activeTab === "gif" ? gifUrl : audioUrl,
+          // media_urls_json persists all collage images (up to 4) so drafts fully restore
+          media_urls_json: activeTab === "image" ? JSON.stringify(images) : "[]",
           text_layers_json: JSON.stringify(textLayers),
+          // Phase 2E: persist video captions
+          captions_json: activeTab === "video" ? JSON.stringify(parseCaptionLines(videoCaptions)) : "[]",
           template_id: templateId || "",
           updated_at: serverTimestamp()
         };
@@ -626,19 +762,33 @@ const Lab = () => {
     });
   };
 
+  // --- Canvas Settings State ---
+  const [canvasAspect, setCanvasAspect] = useState("1:1"); // "1:1" | "16:9" | "9:16" | "4:3"
+  const [canvasBg, setCanvasBg] = useState("#1e293b"); // background fill color
+
+  const ASPECT_RATIOS = {
+    "1:1":  { css: "aspect-square",  w: 1, h: 1 },
+    "16:9": { css: "aspect-video",   w: 16, h: 9 },
+    "9:16": { css: "aspect-[9/16]",  w: 9, h: 16 },
+    "4:3":  { css: "aspect-[4/3]",   w: 4, h: 3 },
+  };
+
   const generateMemeBlob = async () => {
     const container = canvasContainerRef.current;
     if (!container) return null;
-    const width = container.offsetWidth || 500;
-    const height = container.offsetHeight || 500;
+    const scale = 1;
+    const displayW = container.offsetWidth || 500;
+    const displayH = container.offsetHeight || 500;
+    const width  = displayW * scale;
+    const height = displayH * scale;
 
     const canvas = document.createElement("canvas");
-    canvas.width = width;
+    canvas.width  = width;
     canvas.height = height;
     const ctx = canvas.getContext("2d");
 
-    // Draw background color first
-    ctx.fillStyle = "#ffffff";
+    // Draw background
+    ctx.fillStyle = canvasBg;
     ctx.fillRect(0, 0, width, height);
 
     // Draw images collage if activeTab is "image"
@@ -651,42 +801,103 @@ const Lab = () => {
           loadedImages.push(img);
         } catch (err) {
           console.error("Failed to load image", images[i], err);
+          loadedImages.push(null);
         }
       }
 
-      if (numImages === 1 && loadedImages[0]) {
-        ctx.drawImage(loadedImages[0], 0, 0, width, height);
-      } else if (numImages === 2) {
-        const colWidth = width / 2;
-        if (loadedImages[0]) ctx.drawImage(loadedImages[0], 0, 0, colWidth, height);
-        if (loadedImages[1]) ctx.drawImage(loadedImages[1], colWidth, 0, colWidth, height);
-      } else if (numImages === 3) {
-        const colWidth = width / 3;
-        if (loadedImages[0]) ctx.drawImage(loadedImages[0], 0, 0, colWidth, height);
-        if (loadedImages[1]) ctx.drawImage(loadedImages[1], colWidth, 0, colWidth, height);
-        if (loadedImages[2]) ctx.drawImage(loadedImages[2], colWidth * 2, 0, colWidth, height);
-      } else if (numImages === 4) {
-        const colWidth = width / 2;
-        const rowHeight = height / 2;
-        if (loadedImages[0]) ctx.drawImage(loadedImages[0], 0, 0, colWidth, rowHeight);
-        if (loadedImages[1]) ctx.drawImage(loadedImages[1], colWidth, 0, colWidth, rowHeight);
-        if (loadedImages[2]) ctx.drawImage(loadedImages[2], 0, rowHeight, colWidth, rowHeight);
-        if (loadedImages[3]) ctx.drawImage(loadedImages[3], colWidth, rowHeight, colWidth, rowHeight);
+      const drawImageContain = (img, dx, dy, dw, dh) => {
+        if (!img) return;
+        const imageAspect = img.width / img.height;
+        const containerAspect = dw / dh;
+        let targetW = dw;
+        let targetH = dh;
+        let targetX = dx;
+        let targetY = dy;
+        if (imageAspect > containerAspect) {
+          targetH = dw / imageAspect;
+          targetY = dy + (dh - targetH) / 2;
+        } else {
+          targetW = dh * imageAspect;
+          targetX = dx + (dw - targetW) / 2;
+        }
+        ctx.drawImage(img, targetX, targetY, targetW, targetH);
+      };
+
+      if (numImages === 1) {
+        if (loadedImages[0]) drawImageContain(loadedImages[0], 0, 0, width, height);
+      } else if (collageLayout === "columns") {
+        const activeSizes = panelSizes.slice(0, numImages);
+        const totalWeight = activeSizes.reduce((a, b) => a + b, 0);
+        let currentX = 0;
+        for (let i = 0; i < numImages; i++) {
+          const w = Math.round(width * (activeSizes[i] / totalWeight));
+          const wActual = (i === numImages - 1) ? (width - currentX) : w;
+          if (loadedImages[i]) {
+            drawImageContain(loadedImages[i], currentX, 0, wActual, height);
+          }
+          currentX += wActual;
+        }
+      } else if (collageLayout === "rows") {
+        const activeSizes = panelSizes.slice(0, numImages);
+        const totalWeight = activeSizes.reduce((a, b) => a + b, 0);
+        let currentY = 0;
+        for (let i = 0; i < numImages; i++) {
+          const h = Math.round(height * (activeSizes[i] / totalWeight));
+          const hActual = (i === numImages - 1) ? (height - currentY) : h;
+          if (loadedImages[i]) {
+            drawImageContain(loadedImages[i], 0, currentY, width, hActual);
+          }
+          currentY += hActual;
+        }
+      } else if (collageLayout === "grid" && numImages === 4) {
+        const topH = Math.round(height * gridSplit.y);
+        const botH = height - topH;
+        
+        const topW1 = Math.round(width * gridSplit.topX);
+        const topW2 = width - topW1;
+        
+        const botW1 = Math.round(width * gridSplit.bottomX);
+        const botW2 = width - botW1;
+
+        if (loadedImages[0]) drawImageContain(loadedImages[0], 0, 0, topW1, topH);
+        if (loadedImages[1]) drawImageContain(loadedImages[1], topW1, 0, topW2, topH);
+        if (loadedImages[2]) drawImageContain(loadedImages[2], 0, topH, botW1, botH);
+        if (loadedImages[3]) drawImageContain(loadedImages[3], botW1, topH, botW2, botH);
+      } else {
+        if (loadedImages[0]) drawImageContain(loadedImages[0], 0, 0, width, height);
       }
     }
 
-    // Draw text overlays
+    // Draw text overlays — supports align, opacity, rotation, maxWidth
     textLayers.forEach(layer => {
-      ctx.font = `${layer.fontSize}px ${layer.fontFamily || 'Impact'}`;
+      ctx.save();
+      ctx.globalAlpha = layer.opacity ?? 1;
+
+      const scaledX = layer.x * scale;
+      const scaledY = layer.y * scale;
+      const scaledFontSize = layer.fontSize * scale;
+
+      // Rotate around the text origin point
+      if (layer.rotation) {
+        ctx.translate(scaledX, scaledY);
+        ctx.rotate((layer.rotation * Math.PI) / 180);
+        ctx.translate(-scaledX, -scaledY);
+      }
+
+      ctx.font = `${scaledFontSize}px ${layer.fontFamily || 'Impact'}`;
       ctx.fillStyle = layer.color || '#FFFFFF';
       ctx.strokeStyle = layer.strokeColor || '#000000';
-      ctx.lineWidth = (layer.strokeWidth || 0) * 2; // scale stroke to make it look prominent
+      ctx.lineWidth = (layer.strokeWidth || 0) * 2 * scale;
       ctx.textBaseline = 'top';
-      
+      ctx.textAlign = layer.textAlign || 'left';
+
+      const maxW = layer.maxWidth ? layer.maxWidth * scale : undefined;
+
       if (layer.strokeWidth > 0) {
-        ctx.strokeText(layer.text, layer.x, layer.y);
+        ctx.strokeText(layer.text, scaledX, scaledY, maxW);
       }
-      ctx.fillText(layer.text, layer.x, layer.y);
+      ctx.fillText(layer.text, scaledX, scaledY, maxW);
+      ctx.restore();
     });
 
     return new Promise((resolve) => {
@@ -697,8 +908,125 @@ const Lab = () => {
   };
 
   // --- Final Publish & Save Workflow ---
-  const handlePublishSubmit = async () => {
-    if (!user) return;
+  const handlePublishSubmit = async (overridePublish) => {
+    const isPublic = typeof overridePublish === "boolean" ? overridePublish : publishToLibrary;
+
+    // --- CASE A: DOWNLOAD ONLY FLOW (Bypass cloud database & validations) ---
+    if (!isPublic) {
+      setLoading(true);
+      setAlertMessage("");
+      try {
+        if (activeTab === "image") {
+          const blob = await generateMemeBlob();
+          if (blob) {
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement("a");
+            a.download = `${title.trim() || "meme"}.png`;
+            a.href = url;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+          }
+        } else if (activeTab === "gif") {
+          const workspaceElement = canvasContainerRef.current;
+          if (workspaceElement) {
+            const canvasResult = await html2canvas(workspaceElement, {
+              useCORS: true,
+              backgroundColor: canvasBg || "#FFFFFF"
+            });
+            const blob = await new Promise(resolve => canvasResult.toBlob(resolve, "image/png"));
+            if (blob) {
+              const url = URL.createObjectURL(blob);
+              const a = document.createElement("a");
+              a.download = `${title.trim() || "gif_meme"}.png`;
+              a.href = url;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            }
+          }
+        } else if (activeTab === "video") {
+          // Week 6: real ffmpeg.wasm trim for download-only flow
+          if (videoFile && window.crossOriginIsolated) {
+            try {
+              setIsTrimming(true);
+              setFfmpegProgress(0);
+              const trimmedBlob = await trimVideo(videoFile, videoTrimStart, videoTrimEnd, (p) => setFfmpegProgress(p));
+              const url = URL.createObjectURL(trimmedBlob);
+              const a = document.createElement("a");
+              a.download = `${title.trim() || "video_meme"}.mp4`;
+              a.href = url;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+              URL.revokeObjectURL(url);
+            } finally {
+              setIsTrimming(false);
+            }
+          } else {
+            // Fallback: download raw video (no trim) — handles sample URLs and non-isolated browsers
+            const a = document.createElement("a");
+            a.download = `${title.trim() || "video_meme"}.mp4`;
+            a.href = videoUrl;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
+        } else if (activeTab === "audio") {
+          // Week 7: download the audiogram card PNG for audio memes
+          if (audiogramRef.current) {
+            try {
+              const cardBlob = await audiogramRef.current.generateCardBlob();
+              if (cardBlob) {
+                const url = URL.createObjectURL(cardBlob);
+                const a = document.createElement("a");
+                a.download = `${title.trim() || "audio_meme"}_card.png`;
+                a.href = url;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+              }
+            } catch (_) {
+              // Fallback to raw audio download
+              const a = document.createElement("a");
+              a.download = `${title.trim() || "audio_meme"}.mp3`;
+              a.href = audioUrl;
+              document.body.appendChild(a);
+              a.click();
+              document.body.removeChild(a);
+            }
+          } else {
+            const a = document.createElement("a");
+            a.download = `${title.trim() || "audio_meme"}.mp3`;
+            a.href = audioUrl;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+          }
+        }
+        setShowSaveModal(false);
+      } catch (err) {
+        console.error(err);
+        setAlertMessage("Failed to download local file.");
+      } finally {
+        setLoading(false);
+      }
+      return;
+    }
+
+    // --- CASE B: PUBLISH TO COMMUNITY LIBRARY FLOW (Require authentication & fields metadata validation) ---
+    if (!user) {
+      setAlertMessage("You must be logged in to publish creations to the library.");
+      return;
+    }
+    if (!title.trim()) {
+      setAlertMessage("Creations published to the library require a Meme Title.");
+      return;
+    }
+
     setLoading(true);
     setAlertMessage("");
 
@@ -723,7 +1051,7 @@ const Lab = () => {
           // Local file download trigger
           const downloadUrl = URL.createObjectURL(blob);
           const link = document.createElement("a");
-          link.download = `${title || 'meme'}.png`;
+          link.download = `${title.trim() || 'meme'}.png`;
           link.href = downloadUrl;
           document.body.appendChild(link);
           link.click();
@@ -731,42 +1059,119 @@ const Lab = () => {
           URL.revokeObjectURL(downloadUrl);
         }
       } 
-      // 2. Upload video file to Storage if uploaded manually
+      // 2. Week 6: Real ffmpeg.wasm trim → upload trimmed video to Storage
       else if (activeTab === "video" && videoFile) {
-        const storageRef = ref(storage, `memes/${user.uid}_meme_${Date.now()}`);
-        const snapshot = await uploadBytes(storageRef, videoFile);
+        let videoBlob = videoFile; // default: upload as-is
+
+        if (window.crossOriginIsolated) {
+          try {
+            setIsTrimming(true);
+            setFfmpegProgress(0);
+            videoBlob = await trimVideo(
+              videoFile,
+              videoTrimStart,
+              videoTrimEnd,
+              (p) => setFfmpegProgress(p)
+            );
+          } catch (trimErr) {
+            console.warn("ffmpeg trim failed, falling back to original file:", trimErr);
+          } finally {
+            setIsTrimming(false);
+          }
+        } else {
+          // Not cross-origin-isolated — inform user but continue upload
+          console.warn("crossOriginIsolated is false — uploading original video without trim.");
+        }
+
+        const storageRef = ref(storage, `memes/${user.uid}_meme_${Date.now()}.mp4`);
+        const snapshot = await uploadBytes(storageRef, videoBlob);
         fileUrl = await getDownloadURL(snapshot.ref);
 
-        // Local download of the video file
+        // Local download of trimmed video
+        const trimmedUrl = URL.createObjectURL(videoBlob);
         const link = document.createElement("a");
-        link.download = `${title || 'meme'}.mp4`;
-        link.href = videoUrl;
+        link.download = `${title.trim() || 'meme'}.mp4`;
+        link.href = trimmedUrl;
         document.body.appendChild(link);
         link.click();
         document.body.removeChild(link);
+        URL.revokeObjectURL(trimmedUrl);
       } 
-      // 3. Upload audio file to Storage if uploaded manually
-      else if (activeTab === "audio" && audioFile) {
-        const storageRef = ref(storage, `memes/${user.uid}_meme_${Date.now()}`);
-        const snapshot = await uploadBytes(storageRef, audioFile);
-        fileUrl = await getDownloadURL(snapshot.ref);
+      // 3. Week 7: Generate audiogram PNG card → upload as the meme's media_url
+      else if (activeTab === "audio") {
+        // Step A: upload the raw audio file so QR code can point to it
+        let audioFileUrl = audioUrl;
+        if (audioFile) {
+          const audioStorageRef = ref(storage, `memes/${user.uid}_audio_${Date.now()}`);
+          const audioSnapshot = await uploadBytes(audioStorageRef, audioFile);
+          audioFileUrl = await getDownloadURL(audioSnapshot.ref);
+        }
 
-        // Local download of the audio file
-        const link = document.createElement("a");
-        link.download = `${title || 'meme'}.mp3`;
-        link.href = audioUrl;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+        // Step B: generate audiogram PNG card
+        if (audiogramRef.current) {
+          try {
+            // Pass the now-public audioFileUrl so the QR code is embeddable
+            const cardBlob = await audiogramRef.current.generateCardBlob();
+            if (cardBlob) {
+              const cardStorageRef = ref(storage, `memes/${user.uid}_audiogram_${Date.now()}.png`);
+              const cardSnapshot = await uploadBytes(cardStorageRef, cardBlob);
+              fileUrl = await getDownloadURL(cardSnapshot.ref); // audiogram PNG becomes media_url
+
+              // Local download of the card PNG
+              const downloadUrl = URL.createObjectURL(cardBlob);
+              const link = document.createElement("a");
+              link.download = `${title.trim() || 'audio_meme'}_card.png`;
+              link.href = downloadUrl;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(downloadUrl);
+            }
+          } catch (cardErr) {
+            console.warn("Audiogram card generation failed, using raw audio URL:", cardErr);
+            fileUrl = audioFileUrl;
+          }
+        } else {
+          fileUrl = audioFileUrl;
+        }
       }
-      // 4. Download local GIF file if it is loaded
-      else if (activeTab === "gif" && gifUrl) {
-        const link = document.createElement("a");
-        link.download = `${title || 'meme'}.gif`;
-        link.href = gifUrl;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+      // 4. Download local GIF file if it is loaded, using html2canvas to merge text overlays
+      else if (activeTab === "gif") {
+        if (gifFile) {
+          const storageRef = ref(storage, `memes/${user.uid}_gif_${Date.now()}.gif`);
+          const snapshot = await uploadBytes(storageRef, gifFile);
+          fileUrl = await getDownloadURL(snapshot.ref);
+        }
+
+        // Generate flat preview screenshot with overlays for library display
+        const workspaceElement = canvasContainerRef.current;
+        if (workspaceElement) {
+          try {
+            const canvasResult = await html2canvas(workspaceElement, {
+              useCORS: true,
+              backgroundColor: canvasBg || "#FFFFFF"
+            });
+            const overlayBlob = await new Promise(resolve => canvasResult.toBlob(resolve, "image/png"));
+            if (overlayBlob) {
+              // Upload flat preview PNG to Firebase Storage so the library can show it
+              const storageRef = ref(storage, `memes/${user.uid}_gif_preview_${Date.now()}.png`);
+              const snapshot = await uploadBytes(storageRef, overlayBlob);
+              fileUrl = await getDownloadURL(snapshot.ref);
+
+              // Local download of the flat PNG meme (GIF frames frozen, text overlays burned in)
+              const downloadUrl = URL.createObjectURL(overlayBlob);
+              const link = document.createElement("a");
+              link.download = `${title.trim() || 'meme'}.png`;
+              link.href = downloadUrl;
+              document.body.appendChild(link);
+              link.click();
+              document.body.removeChild(link);
+              URL.revokeObjectURL(downloadUrl);
+            }
+          } catch (err) {
+            console.error("html2canvas screenshot failed", err);
+          }
+        }
       }
 
       const finalSubject = subject === "Other" ? (customSubject.trim() || "Other") : subject;
@@ -774,15 +1179,19 @@ const Lab = () => {
       const parsedKeywords = keywords ? keywords.split(",").map(k => k.trim().toLowerCase()).filter(Boolean) : [];
       const memeData = {
         creator_id: user.uid,
-        title: title || "My Meme Classroom Creation",
+        title: title.trim() || "My Meme Classroom Creation",
         subject: finalSubject,
         age_group: ageGroup,
         format: activeTab,
         language: finalLanguage,
         keywords: parsedKeywords,
-        visibility: publishToLibrary ? "public" : "draft",
+        visibility: "public",
         media_url: fileUrl,
+        // media_urls_json preserves all collage image URLs for display in Library
+        media_urls_json: activeTab === "image" ? JSON.stringify(images) : "[]",
         text_layers_json: JSON.stringify(textLayers),
+        // Phase 2E: persist parsed captions so the Library player can render them
+        captions_json: activeTab === "video" ? JSON.stringify(parseCaptionLines(videoCaptions)) : "[]",
         template_id: templateId || "",
         created_at: serverTimestamp()
       };
@@ -794,13 +1203,11 @@ const Lab = () => {
         await addDoc(collection(db, "memes"), memeData);
       }
 
-      // If user checked publish, update user stats for contributor points
-      if (publishToLibrary) {
-        const statsRef = doc(db, "user_stats", user.uid);
-        await setDoc(statsRef, {
-          memes_created_count: increment(1)
-        }, { merge: true });
-      }
+      // Update user stats for contributor points
+      const statsRef = doc(db, "user_stats", user.uid);
+      await setDoc(statsRef, {
+        memes_created_count: increment(1)
+      }, { merge: true });
 
       if (subject === "Other" && customSubject.trim()) {
         trackCustomSubmission("subject", customSubject.trim());
@@ -809,23 +1216,31 @@ const Lab = () => {
         trackCustomSubmission("language", customLanguage.trim());
       }
 
-      // Mock Local Download Trigger (only if NOT image/video/audio which already download their visual assets)
-      if (!publishToLibrary && activeTab !== "image" && activeTab !== "video" && activeTab !== "audio") {
-        const link = document.createElement("a");
-        link.download = `${title || 'meme'}_draft.txt`;
-        link.href = `data:text/plain;charset=utf-8,${encodeURIComponent(JSON.stringify(memeData))}`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-      }
-
       setShowSaveModal(false);
       navigate("/library");
     } catch (err) {
       console.error(err);
-      setAlertMessage("Failed to save the creation.");
+      setAlertMessage("Failed to save and publish the creation.");
     } finally {
       setLoading(false);
+    }
+  };
+
+  // --- Meme Story Fetch ---
+  const fetchStoryForTemplate = async (templateId) => {
+    setMemeStoryModal(prev => ({ ...prev, loading: true }));
+    try {
+      const q = query(
+        collection(db, "resources"),
+        where("type", "==", "stories"),
+        where("template_id", "==", templateId)
+      );
+      const snap = await getDocs(q);
+      const story = snap.empty ? null : { id: snap.docs[0].id, ...snap.docs[0].data() };
+      setMemeStoryModal(prev => ({ ...prev, loading: false, story }));
+    } catch (err) {
+      console.error("Story fetch failed", err);
+      setMemeStoryModal(prev => ({ ...prev, loading: false, story: null }));
     }
   };
 
@@ -846,18 +1261,56 @@ const Lab = () => {
       const snapshot = await uploadBytes(storageRef, templateFile);
       const fileUrl = await getDownloadURL(snapshot.ref);
 
-      await addDoc(collection(db, "templates"), {
+      let detectedFormat = "image";
+      if (templateFile.type.startsWith("video/")) {
+        detectedFormat = "video";
+      } else if (templateFile.type.startsWith("audio/")) {
+        detectedFormat = "audio";
+      } else if (templateFile.type === "image/gif") {
+        detectedFormat = "gif";
+      }
+
+      const templateDocRef = await addDoc(collection(db, "templates"), {
         title: templateTitle || "Blank Background Template",
         creator_id: user.uid,
         media_url: fileUrl,
+        format: detectedFormat,
         is_admin_preset: false,
         status: "pending", // Baseline schema requirement to lock visibility from editor
         created_at: serverTimestamp()
       });
 
-      setTemplateSuccess("Template contributed successfully! Awaiting Admin approval.");
+      // Optionally attach a meme story to this template contribution
+      if (includeStory && (templateTitle.trim() || storyOrigin.trim())) {
+        await addDoc(collection(db, "resources"), {
+          type: "stories",
+          title: templateTitle.trim() || "Blank Background Template",
+          meme_name: templateTitle.trim() || "Blank Background Template",
+          body: storyOrigin.trim(),
+          usage_context: storyUsageContext.trim(),
+          educational_use: storyEducationalUse.trim(),
+          template_id: templateDocRef.id,
+          author_id: user.uid,
+          status: "live",
+          admin_approved: false,
+          likes_count: 0,
+          flag_count: 0,
+          view_count: 0,
+          created_at: serverTimestamp()
+        });
+      }
+
+      setTemplateSuccess(includeStory && templateTitle.trim() ? "Template + meme story contributed! Awaiting Admin approval." : "Template contributed successfully! Awaiting Admin approval.");
       setTemplateTitle("");
       setTemplateFile(null);
+      setIncludeStory(false);
+      setStoryOrigin("");
+      setStoryUsageContext("");
+      setStoryEducationalUse("");
+      setTimeout(() => {
+        setShowContributeModal(false);
+        setTemplateSuccess("");
+      }, 2000);
     } catch (err) {
       console.error(err);
       setTemplateSuccess("Upload failed. Ensure permissions match.");
@@ -880,31 +1333,25 @@ const Lab = () => {
   const activeTextLayer = textLayers.find(l => l.id === selectedTextId);
 
   return (
-    <div className="max-w-6xl mx-auto py-8 px-4" onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}>
+    <div className="max-w-6xl mx-auto py-2 px-4" onPointerMove={handlePointerMove} onPointerUp={handlePointerUp}>
       
-      {/* Page Title & Guidelines Toggle */}
-      <div className="flex flex-col md:flex-row md:items-center md:justify-between border-b border-gray-200 dark:border-gray-800 pb-5 mb-8">
-        <div>
-          <h1 className="text-3xl font-extrabold tracking-tight">Meme Lab Studio</h1>
-          <p className="mt-1 text-sm text-gray-500">
-            Create high-pedagogy multi-media memes with overlays and custom templates.
-          </p>
-        </div>
-        <div className="mt-4 md:mt-0 flex gap-2 items-center">
+      {/* Toolbar row — action buttons only */}
+      <div className="flex items-center justify-end gap-2 mb-4">
           <button
             onClick={() => setShowTutorialModal(true)}
-            className="flex items-center space-x-1.5 border border-purple-300 dark:border-purple-800 hover:bg-purple-50 dark:hover:bg-purple-950/20 text-purple-600 dark:text-purple-400 text-sm font-semibold px-4 py-2 rounded-lg transition"
+            title="Tutorial & Guidelines"
+            className="flex items-center gap-1.5 border border-gray-200 dark:border-zinc-700 hover:border-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/20 text-gray-500 dark:text-gray-400 hover:text-purple-600 text-xs font-semibold px-3 py-2 rounded-lg transition"
           >
-            <span>ℹ️ Tutorial & Guidelines</span>
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><circle cx="12" cy="12" r="10"/><path strokeLinecap="round" strokeLinejoin="round" d="M12 16v-4m0-4h.01"/></svg>
+            <span className="hidden sm:inline">Guide</span>
           </button>
-          
           <button
             onClick={() => setShowSaveModal(true)}
-            className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold py-2 px-5 rounded-lg shadow-md transition duration-200 text-sm flex items-center space-x-1.5"
+            className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2 px-4 rounded-lg shadow-sm transition text-xs flex items-center gap-1.5"
           >
-            <span>💾 Export Studio Meme</span>
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+            <span>Export</span>
           </button>
-        </div>
       </div>
 
       {alertMessage && (
@@ -919,91 +1366,220 @@ const Lab = () => {
         </div>
       )}
 
+      {/* Week 6: ffmpeg.wasm real-trim progress overlay */}
+      {isTrimming && (
+        <div className="fixed inset-0 z-[100] flex flex-col items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-purple-700 rounded-2xl px-8 py-6 flex flex-col items-center gap-4 shadow-2xl min-w-[280px]">
+            <div className="text-3xl animate-bounce">✂️</div>
+            <p className="text-white font-bold text-sm">Trimming video…</p>
+            <div className="w-full bg-gray-700 rounded-full h-2 overflow-hidden">
+              <div
+                className="bg-purple-500 h-2 rounded-full transition-all duration-300"
+                style={{ width: `${Math.round(ffmpegProgress * 100)}%` }}
+              />
+            </div>
+            <p className="text-gray-400 text-xs">{Math.round(ffmpegProgress * 100)}% — this may take 15–30 seconds</p>
+          </div>
+        </div>
+      )}
+
             {/* Unified SaaS Workbench Card */}
-      <div className={`flex flex-col lg:flex-row h-auto lg:h-[720px] rounded-2xl overflow-hidden shadow-2xl border ${
+      <div className={`flex flex-col lg:flex-row h-auto lg:h-[580px] rounded-2xl overflow-hidden shadow-xl border ${
         highContrastMode 
           ? "bg-zinc-950 border-zinc-800 text-white" 
-          : "bg-slate-50 border-gray-200 text-gray-800"
+          : "bg-white border-gray-200 text-gray-800"
       }`}>
         
-        {/* 1. LEFT SIDEBAR (Segmented Toolbar & Tab Content) */}
-        <div className={`w-full lg:w-[360px] border-r flex flex-col shrink-0 h-[500px] lg:h-full ${
+        {/* 1. LEFT SIDEBAR */}
+        <div className={`w-full lg:w-[300px] border-r flex flex-col shrink-0 h-[420px] lg:h-full ${
           highContrastMode
             ? "bg-zinc-900 border-zinc-800 text-white"
-            : "bg-white border-gray-200 text-gray-800"
+            : "bg-white border-gray-100 text-gray-800"
         }`}>
-          {/* Segmented Control Pill Header */}
-          <div className={`px-4 py-3 border-b ${
-            highContrastMode ? "border-zinc-800 bg-zinc-950" : "border-gray-150 bg-gray-50/50"
+
+          {/* Format Tab Row — Image / Video / GIF / Audio */}
+          <div className={`px-3 pt-3 pb-2 border-b ${
+            highContrastMode ? "border-zinc-800" : "border-gray-100"
           }`}>
-            <div className={`flex p-1 rounded-xl space-x-1 ${
-              highContrastMode ? "bg-zinc-850" : "bg-gray-100"
+            <div className={`flex gap-1 p-1 rounded-lg ${
+              highContrastMode ? "bg-zinc-800" : "bg-gray-100"
+            }`}>
+              {[("image"), ("video"), ("gif"), ("audio")].map((tab) => (
+                <button
+                  type="button"
+                  key={tab}
+                  onClick={() => { setActiveTab(tab); setAlertMessage(""); }}
+                  className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-md text-[11px] font-bold transition ${
+                    activeTab === tab
+                      ? (highContrastMode ? "bg-zinc-700 text-white shadow-sm" : "bg-white text-purple-700 shadow-sm")
+                      : "text-gray-500 hover:text-gray-800 dark:text-zinc-400 dark:hover:text-zinc-200"
+                  }`}
+                >
+                  {TAB_ICONS[tab]}
+                  <span className="capitalize hidden sm:inline">{tab}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Tool Switcher — Media / Text */}
+          <div className={`px-3 py-2 border-b ${
+            highContrastMode ? "border-zinc-800" : "border-gray-100"
+          }`}>
+            <div className={`flex gap-1 ${
+              highContrastMode ? "" : ""
             }`}>
               <button
                 type="button"
                 onClick={() => setActiveControlTab("media")}
-                className={`flex-1 flex items-center justify-center space-x-1.5 py-2 text-xs font-bold rounded-lg transition ${
+                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11px] font-bold transition border ${
                   activeControlTab === "media"
-                    ? (highContrastMode ? "bg-zinc-700 text-white shadow-sm" : "bg-white text-purple-700 shadow-sm")
-                    : (highContrastMode ? "text-zinc-400 hover:text-zinc-200" : "text-gray-500 hover:text-gray-800")
+                    ? (highContrastMode ? "bg-zinc-700 text-white border-zinc-600" : "bg-purple-50 text-purple-700 border-purple-200")
+                    : (highContrastMode ? "text-zinc-400 border-transparent hover:text-zinc-200" : "text-gray-500 border-transparent hover:text-gray-800")
                 }`}
               >
-                <span>📁</span>
-                <span>Media</span>
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                Media
               </button>
               <button
                 type="button"
                 onClick={() => setActiveControlTab("text")}
-                className={`flex-1 flex items-center justify-center space-x-1.5 py-2 text-xs font-bold rounded-lg transition ${
+                className={`flex-1 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11px] font-bold transition border ${
                   activeControlTab === "text"
-                    ? (highContrastMode ? "bg-zinc-700 text-white shadow-sm" : "bg-white text-purple-700 shadow-sm")
-                    : (highContrastMode ? "text-zinc-400 hover:text-zinc-200" : "text-gray-500 hover:text-gray-800")
+                    ? (highContrastMode ? "bg-zinc-700 text-white border-zinc-600" : "bg-purple-50 text-purple-700 border-purple-200")
+                    : (highContrastMode ? "text-zinc-400 border-transparent hover:text-zinc-200" : "text-gray-500 border-transparent hover:text-gray-800")
                 }`}
               >
-                <span>✍️</span>
-                <span>Text</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveControlTab("settings")}
-                className={`flex-1 flex items-center justify-center space-x-1.5 py-2 text-xs font-bold rounded-lg transition ${
-                  activeControlTab === "settings"
-                    ? (highContrastMode ? "bg-zinc-700 text-white shadow-sm" : "bg-white text-purple-700 shadow-sm")
-                    : (highContrastMode ? "text-zinc-400 hover:text-zinc-200" : "text-gray-500 hover:text-gray-800")
-                }`}
-              >
-                <span>⚙️</span>
-                <span>Templates</span>
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                Text
               </button>
             </div>
           </div>
 
-          {/* Active Tab Panel Content */}
-          <div className="flex-grow p-5 overflow-y-auto space-y-6">
+          {/* Active Tool Panel Content */}
+          <div className="flex-grow px-4 py-4 overflow-y-auto space-y-5">
             {/* MEDIA CONTROLS */}
             {activeControlTab === "media" && (
               <div className="space-y-6">
+
+                {/* Library templates matching the active format */}
+                {(() => {
+                  const DEFAULT_IMAGE_TEMPLATES = [
+                    { id: "preset-sanders", title: "Bernie Asking", media_url: "https://api.memegen.link/images/sanders.png", format: "image" },
+                    { id: "preset-smart", title: "Smart Logic", media_url: "https://api.memegen.link/images/smart.png", format: "image" },
+                    { id: "preset-success", title: "Success Kid", media_url: "https://api.memegen.link/images/success.png", format: "image" },
+                    { id: "preset-gru", title: "Gru's 4-Panel Plan", media_url: "https://api.memegen.link/images/gru.png", format: "image" }
+                  ];
+
+                  const dbFormatTemplates = availableTemplates.filter(temp => {
+                    if (activeTab === "image") return !temp.format || temp.format === "image";
+                    return temp.format === activeTab;
+                  });
+
+                  const templatesToDisplay = [
+                    ...dbFormatTemplates,
+                    ...(activeTab === "image" ? DEFAULT_IMAGE_TEMPLATES : [])
+                  ];
+
+                  templatesToDisplay.sort((a, b) => {
+                    const aFeat = !!a.is_featured;
+                    const bFeat = !!b.is_featured;
+                    if (aFeat && !bFeat) return -1;
+                    if (!aFeat && bFeat) return 1;
+                    return 0;
+                  });
+
+                  return (
+                    <div className="space-y-2">
+                      <span className="block text-[10px] font-bold uppercase tracking-wider text-gray-400">Templates</span>
+                      {templatesToDisplay.length > 0 ? (
+                        <div className="grid grid-cols-3 gap-1.5 max-h-[148px] overflow-y-auto pr-0.5">
+                          {templatesToDisplay.map((temp) => (
+                            <div key={temp.id} className="relative">
+                              <button
+                                type="button"
+                                onClick={() => handleSelectTemplate(temp)}
+                                title={temp.title}
+                                className={`group relative w-full aspect-video rounded-lg overflow-hidden border transition active:scale-95 ${
+                                  temp.is_featured
+                                    ? "border-indigo-400 dark:border-indigo-500"
+                                    : "border-gray-200 dark:border-zinc-700 hover:border-purple-400"
+                                }`}
+                              >
+                                {temp.format === "video" ? (
+                                  <div className="w-full h-full bg-zinc-800 flex items-center justify-center">
+                                    <svg className="w-5 h-5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+                                  </div>
+                                ) : temp.format === "audio" ? (
+                                  <div className="w-full h-full bg-zinc-800 flex items-center justify-center">
+                                    <svg className="w-5 h-5 text-zinc-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}><path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" /></svg>
+                                  </div>
+                                ) : (
+                                  <img src={temp.media_url} alt={temp.title} className="w-full h-full object-cover" />
+                                )}
+                                {/* Hover overlay with name */}
+                                <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition flex items-end p-1">
+                                  <span className="text-white text-[8px] font-bold leading-tight line-clamp-2">{temp.title}</span>
+                                </div>
+                              </button>
+                              {/* 📖 Know More icon — only for db templates with an id */}
+                              {temp.id && !temp.id.startsWith("preset-") && (
+                                <button
+                                  type="button"
+                                  title="Know more about this meme"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setStoryExpanded(false);
+                                    setMemeStoryModal({ open: true, story: null, template: temp, loading: true });
+                                    fetchStoryForTemplate(temp.id);
+                                  }}
+                                  className="absolute top-0.5 right-0.5 w-5 h-5 bg-amber-500/90 hover:bg-amber-500 text-white rounded-md flex items-center justify-center text-[10px] shadow-md transition active:scale-90 z-10"
+                                >
+                                  📖
+                                </button>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <p className="text-gray-400 text-[10px] italic">No templates yet.</p>
+                      )}
+
+                      {/* Contribute Template button — only for logged-in users */}
+                      {user && (
+                        <button
+                          type="button"
+                          onClick={() => setShowContributeModal(true)}
+                          className="w-full mt-2 flex items-center justify-center gap-1.5 py-1.5 rounded-lg text-[11px] font-bold border border-dashed border-purple-300 dark:border-purple-700 text-purple-600 dark:text-purple-400 hover:bg-purple-50 dark:hover:bg-purple-950/30 transition active:scale-95"
+                        >
+                          <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" /></svg>
+                          Contribute a Template
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
                 
                 {activeTab === "image" && (
-                  <div className="space-y-5">
-                    <div className="flex items-center justify-between border-b pb-2 border-gray-100 dark:border-zinc-800">
-                      <h3 className="font-bold text-xs uppercase tracking-wider text-purple-700 dark:text-purple-400">Collage Media Assets</h3>
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-gray-400">Upload</span>
                       <span className="text-[10px] bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 font-bold px-2 py-0.5 rounded-full">
-                        {images.length}/4 Images
+                        {images.length}/4
                       </span>
                     </div>
 
-                    {/* Premium Dashed-Border Upload Dropzone */}
+                    {/* Compact Dropzone */}
                     <div 
                       onDragOver={(e) => { e.preventDefault(); setIsDragOverDropzone(true); }}
                       onDragLeave={() => setIsDragOverDropzone(false)}
                       onDrop={handleDropzoneDrop}
-                      className={`border-2 border-dashed rounded-xl p-5 text-center transition cursor-pointer relative flex flex-col items-center justify-center min-h-[140px] ${
+                      className={`border-2 border-dashed rounded-xl text-center transition cursor-pointer relative flex flex-col items-center justify-center min-h-[88px] ${
                         isDragOverDropzone
-                          ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/20"
+                          ? "border-purple-500 bg-purple-50/50 dark:bg-purple-955/20"
                           : (highContrastMode 
                               ? "border-zinc-700 bg-zinc-900/50 hover:border-zinc-500" 
-                              : "border-gray-300 bg-slate-50/50 hover:border-purple-450 hover:bg-slate-50")
+                              : "border-gray-200 bg-gray-50 hover:border-purple-400 hover:bg-purple-50/30")
                       }`}
                     >
                       <input 
@@ -1013,25 +1589,128 @@ const Lab = () => {
                         onChange={handleImageUpload} 
                         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                       />
-                      <svg className="w-8 h-8 text-purple-500 mb-2.5 animate-bounce" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <svg className="w-6 h-6 text-gray-400 mb-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                       </svg>
-                      <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 block mb-1">
-                        Drag & drop images here
-                      </span>
-                      <span className="text-[10px] text-gray-500 block">
-                        or click to browse your files
-                      </span>
+                      <span className="text-[11px] text-gray-500">Drop image or <span className="text-purple-600 font-semibold">browse</span></span>
                     </div>
 
+                    {/* Browse Library Button */}
+                    <button
+                      type="button"
+                      onClick={() => setShowLibraryPickerModal(true)}
+                      className="w-full border border-purple-300 dark:border-purple-700 text-purple-700 dark:text-purple-300 hover:bg-purple-50 dark:hover:bg-purple-955/20 font-semibold py-1.5 rounded-lg text-xs transition flex items-center justify-center gap-1.5 active:scale-95"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M8 14v3m4-3v3m4-3v3M3 21h18M3 10h18M3 7l9-4 9 4M4 10h16v11H4V10z" /></svg>
+                      Browse Library
+                    </button>
+
+                    {/* Per-image thumbnail strip with individual ✕ removal */}
                     {images.length > 0 && (
-                      <button 
-                        onClick={() => setImages([])}
-                        className="text-xs font-bold text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 flex items-center space-x-1 mt-2 transition"
-                      >
-                        <span>🗑️</span>
-                        <span>Clear Collage Grid</span>
-                      </button>
+                      <div className="space-y-2">
+                        <div className="flex flex-wrap gap-2">
+                          {images.map((src, idx) => (
+                            <div key={idx} className="relative group w-14 h-14 rounded-lg overflow-hidden border-2 border-gray-200 dark:border-zinc-700 hover:border-purple-500 transition flex-shrink-0">
+                              <img src={src} alt={`Image ${idx + 1}`} className="w-full h-full object-cover" />
+                              <button
+                                type="button"
+                                onClick={() => removeImage(idx)}
+                                className="absolute top-0 right-0 w-4 h-4 bg-red-600 text-white text-[9px] font-black rounded-bl-md flex items-center justify-center opacity-0 group-hover:opacity-100 transition leading-none"
+                                title={`Remove image ${idx + 1}`}
+                              >
+                                ✕
+                              </button>
+                              <span className="absolute bottom-0 left-0 right-0 bg-black/50 text-white text-[8px] text-center py-0.5 font-semibold">{idx + 1}</span>
+                            </div>
+                          ))}
+                          {images.length < 4 && (
+                            <label className="w-14 h-14 rounded-lg border-2 border-dashed border-gray-300 dark:border-zinc-700 flex items-center justify-center cursor-pointer hover:border-purple-400 transition flex-shrink-0 relative">
+                              <input type="file" multiple accept="image/*" onChange={handleImageUpload} className="absolute inset-0 opacity-0 cursor-pointer" />
+                              <span className="text-xl text-gray-400 leading-none">+</span>
+                            </label>
+                          )}
+                        </div>
+
+                        {/* Layout Organization controls (only shown when ≥2 images) */}
+                        {images.length >= 2 && (
+                          <div className="space-y-2">
+                            <div>
+                              <span className="block text-[10px] font-bold uppercase tracking-wider text-gray-500 mb-1.5">Organize Layout</span>
+                              <div className="flex gap-1.5 flex-wrap">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCollageLayout("columns");
+                                    setPanelSizes([1, 1, 1, 1]);
+                                  }}
+                                  className={`text-[10px] font-bold px-2 py-1 rounded-lg transition border flex items-center gap-1 ${
+                                    collageLayout === "columns"
+                                      ? "bg-purple-600 text-white border-purple-600"
+                                      : "bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-zinc-700 hover:border-purple-400"
+                                  }`}
+                                  title="Arrange in vertical columns"
+                                >
+                                  <span>║</span>
+                                  <span>Columns</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setCollageLayout("rows");
+                                    setPanelSizes([1, 1, 1, 1]);
+                                  }}
+                                  className={`text-[10px] font-bold px-2 py-1 rounded-lg transition border flex items-center gap-1 ${
+                                    collageLayout === "rows"
+                                      ? "bg-purple-600 text-white border-purple-600"
+                                      : "bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-zinc-700 hover:border-purple-400"
+                                  }`}
+                                  title="Arrange in horizontal rows"
+                                >
+                                  <span>═</span>
+                                  <span>Rows</span>
+                                </button>
+                                {images.length === 4 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      setCollageLayout("grid");
+                                      setGridSplit({ x: 0.5, y: 0.5, topX: 0.5, bottomX: 0.5 });
+                                    }}
+                                    className={`text-[10px] font-bold px-2 py-1 rounded-lg transition border flex items-center gap-1 ${
+                                      collageLayout === "grid"
+                                        ? "bg-purple-600 text-white border-purple-600"
+                                        : "bg-gray-100 dark:bg-zinc-800 text-gray-600 dark:text-gray-400 border-gray-200 dark:border-zinc-700 hover:border-purple-400"
+                                    }`}
+                                    title="Arrange in a 2x2 grid"
+                                  >
+                                    <span>田</span>
+                                    <span>Grid</span>
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setPanelSizes([1, 1, 1, 1]);
+                                setGridSplit({ y: 0.5, topX: 0.5, bottomX: 0.5 });
+                              }}
+                              className="text-[10px] font-bold text-purple-600 dark:text-purple-400 hover:underline flex items-center gap-1"
+                            >
+                              ↺ Reset Split Proportions
+                            </button>
+                          </div>
+                        )}
+
+                        <button
+                          onClick={() => { setImages([]); setImageFiles([]); }}
+                          className="text-xs font-semibold text-red-500 hover:text-red-600 dark:text-red-400 flex items-center gap-1 transition"
+                        >
+                          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                          Clear all
+                        </button>
+                      </div>
                     )}
                   </div>
                 )}
@@ -1046,19 +1725,29 @@ const Lab = () => {
                         </span>
                       )}
                     </div>
+
+                    {/* Week 6: Browser compatibility warning for ffmpeg.wasm */}
+                    {!window.crossOriginIsolated && (
+                      <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300">
+                        <svg className="w-4 h-4 shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"/></svg>
+                        <p className="text-[10px] leading-relaxed">
+                          <strong>Real video trimming unavailable.</strong> Your browser lacks Cross-Origin Isolation. Trimming works best on Chrome/Edge.
+                        </p>
+                      </div>
+                    )}
                     
                     <div className="space-y-4">
-                      {/* Premium Dashed-Border Upload Dropzone */}
+                      {/* Compact Dropzone */}
                       <div 
                         onDragOver={(e) => { e.preventDefault(); setIsDragOverDropzone(true); }}
                         onDragLeave={() => setIsDragOverDropzone(false)}
                         onDrop={handleDropzoneDrop}
-                        className={`border-2 border-dashed rounded-xl p-5 text-center transition cursor-pointer relative flex flex-col items-center justify-center min-h-[140px] ${
+                        className={`border-2 border-dashed rounded-xl text-center transition cursor-pointer relative flex flex-col items-center justify-center min-h-[88px] ${
                           isDragOverDropzone
-                            ? "border-purple-600 bg-purple-50/50 dark:bg-purple-950/20"
+                            ? "border-purple-500 bg-purple-50/50 dark:bg-purple-950/20"
                             : (highContrastMode 
                                 ? "border-zinc-700 bg-zinc-900/50 hover:border-zinc-500" 
-                                : "border-gray-300 bg-slate-50/50 hover:border-purple-450 hover:bg-slate-50")
+                                : "border-gray-200 bg-gray-50 hover:border-purple-400 hover:bg-purple-50/30")
                         }`}
                       >
                         <input 
@@ -1067,15 +1756,10 @@ const Lab = () => {
                           onChange={handleVideoUpload} 
                           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                         />
-                        <svg className="w-8 h-8 text-purple-500 mb-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <svg className="w-6 h-6 text-gray-400 mb-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" />
                         </svg>
-                        <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 block mb-1">
-                          Drag & drop video here
-                        </span>
-                        <span className="text-[10px] text-gray-500 block">
-                          or click to browse (&lt; 15s limit)
-                        </span>
+                        <span className="text-[11px] text-gray-500">Drop video or <span className="text-purple-600 font-semibold">browse</span> (&lt;15s)</span>
                       </div>
 
                       <div>
@@ -1130,6 +1814,27 @@ const Lab = () => {
                             />
                           </div>
                         </div>
+
+                        {/* Phase 2E: Video Captions textarea */}
+                        <div className="mt-4 pt-4 border-t border-gray-100 dark:border-gray-800">
+                          <label className="block text-[11px] font-semibold uppercase tracking-wider mb-1.5 text-gray-550">
+                            Timed Captions
+                          </label>
+                          <p className="text-[10px] text-gray-400 mb-2 leading-relaxed">
+                            One caption per line. Format: <code className="bg-gray-100 dark:bg-zinc-800 px-1 rounded">0:02 – Caption text</code>
+                          </p>
+                          <textarea
+                            value={videoCaptions}
+                            onChange={(e) => setVideoCaptions(e.target.value)}
+                            placeholder={`0:01 – Title of this video\n0:05 – Key concept here\n0:10 – Summary or punchline`}
+                            rows={5}
+                            className={`w-full text-xs rounded-lg border px-3 py-2 font-mono resize-y focus:outline-none focus:ring-2 focus:ring-purple-500 ${
+                              highContrastMode
+                                ? "bg-zinc-900 border-zinc-700 text-white placeholder-zinc-600"
+                                : "bg-white border-gray-200 text-gray-800 placeholder-gray-400"
+                            }`}
+                          />
+                        </div>
                       </div>
                     )}
                   </div>
@@ -1139,26 +1844,81 @@ const Lab = () => {
                   <div className="space-y-5">
                     <div className="flex items-center justify-between border-b pb-2 border-gray-100 dark:border-zinc-800">
                       <h3 className="font-bold text-xs uppercase tracking-wider text-purple-700 dark:text-purple-400">GIF Media Assets</h3>
+                      {gifUrl && (
+                        <span className="text-[10px] bg-purple-100 dark:bg-purple-900/40 text-purple-700 dark:text-purple-300 font-bold px-2 py-0.5 rounded-full">
+                          Loaded
+                        </span>
+                      )}
                     </div>
                     <div className="space-y-4">
-                      <div>
-                        <label className="block text-[11px] font-semibold uppercase tracking-wider mb-2 text-gray-500">GIF Source URL</label>
+                      {/* Compact Dropzone */}
+                      <div 
+                        onDragOver={(e) => { e.preventDefault(); setIsDragOverDropzone(true); }}
+                        onDragLeave={() => setIsDragOverDropzone(false)}
+                        onDrop={handleDropzoneDrop}
+                        className={`border-2 border-dashed rounded-xl text-center transition cursor-pointer relative flex flex-col items-center justify-center min-h-[88px] ${
+                          isDragOverDropzone
+                            ? "border-purple-500 bg-purple-50/50 dark:bg-purple-950/20"
+                            : (highContrastMode 
+                                ? "border-zinc-700 bg-zinc-900/50 hover:border-zinc-500" 
+                                : "border-gray-200 bg-gray-50 hover:border-purple-400 hover:bg-purple-50/30")
+                        }`}
+                      >
                         <input 
-                          type="text" 
-                          value={gifUrl} 
-                          onChange={(e) => setGifUrl(e.target.value)} 
-                          placeholder="Giphy URL or external link..."
-                          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-xs bg-gray-50 dark:bg-gray-900 focus:ring-2 focus:ring-purple-500 outline-none"
+                          type="file" 
+                          accept="image/gif" 
+                          onChange={(e) => {
+                            const file = e.target.files?.[0];
+                            if (file) {
+                              setGifUrl(createObjectURLSafe(file));
+                              setGifFile(file);
+                            }
+                          }} 
+                          className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                         />
+                        <svg className="w-6 h-6 text-gray-400 mb-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
+                        </svg>
+                        <span className="text-[11px] text-gray-500">Drop GIF or <span className="text-purple-600 font-semibold">browse</span></span>
                       </div>
+
+                      {/* Giphy Search Engine */}
                       <div>
-                        <span className="block text-[11px] font-bold uppercase tracking-wider mb-2 text-gray-500">Load Mock Sample</span>
+                        <label className="block text-[11px] font-semibold uppercase tracking-wider mb-2 text-gray-500">Search Giphy Library</label>
+                        <GiphySearch onSelect={(url) => {
+                          setGifUrl(url);
+                          setGifFile(null);
+                        }} />
+                      </div>
+
+                      {/* Paste URL Collapsible/Advanced details option */}
+                      <details className="text-[10px] font-semibold text-gray-500">
+                        <summary className="cursor-pointer hover:text-purple-600 transition select-none">Advanced: Paste direct GIF URL</summary>
+                        <div className="pt-2">
+                          <input 
+                            type="text" 
+                            value={gifUrl.startsWith("blob:") ? "" : gifUrl} 
+                            onChange={(e) => {
+                              setGifUrl(e.target.value);
+                              setGifFile(null);
+                            }} 
+                            placeholder="Paste Giphy URL or external link..."
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 rounded-lg text-xs bg-gray-50 dark:bg-gray-900 focus:ring-2 focus:ring-purple-500 outline-none"
+                          />
+                        </div>
+                      </details>
+
+                      <div>
+                        <span className="block text-[11px] font-bold uppercase tracking-wider mb-2 text-gray-550">Or Load Mock Sample</span>
                         <div className="flex flex-wrap gap-2">
                           {MEDIA_SAMPLES.gif.map((sample, idx) => (
                             <button
                               key={sample.id}
                               type="button"
-                              onClick={() => selectMediaPreset(sample.url, "gif")}
+                              onClick={() => {
+                                selectMediaPreset(sample.url, "gif");
+                                setGifFile(null);
+                              }}
                               className="text-[11px] bg-purple-50 dark:bg-purple-955/20 text-purple-755 dark:text-purple-300 font-bold px-3 py-1.5 rounded-lg border border-purple-200 dark:border-purple-800/40 hover:bg-purple-100 transition active:scale-95"
                             >
                               Sample {idx + 1}
@@ -1182,17 +1942,17 @@ const Lab = () => {
                     </div>
                     
                     <div className="space-y-4">
-                      {/* Premium Dashed-Border Upload Dropzone */}
+                      {/* Compact Dropzone */}
                       <div 
                         onDragOver={(e) => { e.preventDefault(); setIsDragOverDropzone(true); }}
                         onDragLeave={() => setIsDragOverDropzone(false)}
                         onDrop={handleDropzoneDrop}
-                        className={`border-2 border-dashed rounded-xl p-5 text-center transition cursor-pointer relative flex flex-col items-center justify-center min-h-[140px] ${
+                        className={`border-2 border-dashed rounded-xl text-center transition cursor-pointer relative flex flex-col items-center justify-center min-h-[88px] ${
                           isDragOverDropzone
-                            ? "border-purple-600 bg-purple-50/50 dark:bg-purple-955/20"
+                            ? "border-purple-500 bg-purple-50/50 dark:bg-purple-955/20"
                             : (highContrastMode 
                                 ? "border-zinc-700 bg-zinc-900/50 hover:border-zinc-500" 
-                                : "border-gray-300 bg-slate-50/50 hover:border-purple-450 hover:bg-slate-50")
+                                : "border-gray-200 bg-gray-50 hover:border-purple-400 hover:bg-purple-50/30")
                         }`}
                       >
                         <input 
@@ -1207,15 +1967,10 @@ const Lab = () => {
                           }} 
                           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10"
                         />
-                        <svg className="w-8 h-8 text-purple-500 mb-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <svg className="w-6 h-6 text-gray-400 mb-1.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
                           <path strokeLinecap="round" strokeLinejoin="round" d="M9 19V6l12-3v13M9 19c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zm12-3c0 1.105-1.343 2-3 2s-3-.895-3-2 1.343-2 3-2 3 .895 3 2zM9 10l12-3" />
                         </svg>
-                        <span className="text-xs font-semibold text-gray-700 dark:text-gray-300 block mb-1">
-                          Drag & drop audio here
-                        </span>
-                        <span className="text-[10px] text-gray-500 block">
-                          or click to browse (&lt; 20 MB limit)
-                        </span>
+                        <span className="text-[11px] text-gray-500">Drop audio or <span className="text-purple-600 font-semibold">browse</span> (&lt;20 MB)</span>
                       </div>
 
                       <div>
@@ -1283,246 +2038,313 @@ const Lab = () => {
               <div className="space-y-6">
                 <div className="flex items-center justify-between border-b pb-2 border-gray-100 dark:border-zinc-800">
                   <h3 className="font-bold text-xs uppercase tracking-wider text-purple-700 dark:text-purple-400">Overlay Text Engine</h3>
+                  {/* Undo / Redo */}
+                  <div className="flex gap-1">
+                    <button
+                      type="button"
+                      onClick={undoTextLayers}
+                      disabled={!canUndo}
+                      title="Undo (Ctrl+Z)"
+                      className="w-6 h-6 flex items-center justify-center rounded text-[11px] font-bold disabled:opacity-30 hover:bg-gray-100 dark:hover:bg-zinc-800 transition"
+                    >↩</button>
+                    <button
+                      type="button"
+                      onClick={redoTextLayers}
+                      disabled={!canRedo}
+                      title="Redo (Ctrl+Y)"
+                      className="w-6 h-6 flex items-center justify-center rounded text-[11px] font-bold disabled:opacity-30 hover:bg-gray-100 dark:hover:bg-zinc-800 transition"
+                    >↪</button>
+                  </div>
                 </div>
                 
                 <button
                   type="button"
                   onClick={addTextLayer}
-                  className="w-full bg-purple-50 text-purple-700 dark:bg-purple-955/30 dark:text-purple-300 border border-purple-200 dark:border-purple-800 hover:bg-purple-100 font-bold py-2.5 px-4 rounded-xl shadow-sm text-xs transition duration-200 mb-4 active:scale-95"
+                  className="w-full bg-purple-50 text-purple-700 dark:bg-purple-955/30 dark:text-purple-300 border border-purple-200 dark:border-purple-800 hover:bg-purple-100 font-semibold py-2 px-4 rounded-lg text-xs transition flex items-center justify-center gap-1.5 active:scale-95"
                 >
-                  ➕ Add New Text Layer
+                  <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4"/></svg>
+                  Add Text Layer
                 </button>
 
+                {/* Layer list */}
+                {textLayers.length > 0 && (
+                  <div className="space-y-1 mb-2">
+                    {textLayers.map((layer, idx) => (
+                      <button
+                        key={layer.id}
+                        type="button"
+                        onClick={() => setSelectedTextId(layer.id)}
+                        className={`w-full text-left px-2.5 py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-between gap-1 transition ${
+                          selectedTextId === layer.id
+                            ? "bg-purple-100 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 border border-purple-300 dark:border-purple-700"
+                            : "bg-gray-50 dark:bg-zinc-800/60 hover:bg-gray-100 dark:hover:bg-zinc-800 border border-gray-200 dark:border-zinc-700"
+                        }`}
+                      >
+                        <span className="truncate max-w-[140px]">{layer.text || `Layer ${idx + 1}`}</span>
+                        <span className="text-[9px] text-gray-400 font-normal shrink-0">{layer.fontFamily}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+
                 {activeTextLayer ? (
-                  <div className="space-y-4 text-xs font-semibold bg-gray-55 dark:bg-zinc-900/60 p-4 rounded-xl border border-gray-150 dark:border-zinc-800">
+                  <div className="space-y-3 text-xs font-semibold bg-gray-50 dark:bg-zinc-900/60 p-3 rounded-xl border border-gray-150 dark:border-zinc-800">
+                    {/* Text content */}
                     <div>
-                      <label className="block text-gray-550 uppercase mb-1.5">Text String</label>
+                      <label className="block text-[10px] text-gray-400 uppercase tracking-wider mb-1">Text</label>
                       <textarea
                         value={activeTextLayer.text}
                         onChange={(e) => updateTextLayer("text", e.target.value)}
                         rows="2"
-                        className="w-full px-2 py-1.5 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 rounded focus:ring-2 focus:ring-purple-500 outline-none"
+                        className="w-full px-2 py-1.5 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 rounded-lg text-xs focus:ring-2 focus:ring-purple-500 outline-none resize-none"
                       />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
+                    {/* Alignment */}
+                    <div className="flex gap-1">
+                      {[("left"), ("center"), ("right")].map(align => (
+                        <button
+                          key={align}
+                          type="button"
+                          onClick={() => updateTextLayer("textAlign", align)}
+                          title={align}
+                          className={`flex-1 py-1.5 rounded-lg text-xs font-bold capitalize transition border ${
+                            (activeTextLayer.textAlign || "left") === align
+                              ? "bg-purple-600 text-white border-purple-600"
+                              : "bg-gray-100 dark:bg-zinc-800 text-gray-500 border-gray-200 dark:border-zinc-700 hover:border-purple-400"
+                          }`}
+                        >
+                          {align === "left" ? (
+                            <svg className="w-3.5 h-3.5 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M4 12h8m-8 6h12"/></svg>
+                          ) : align === "center" ? (
+                            <svg className="w-3.5 h-3.5 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M8 12h8M6 18h12"/></svg>
+                          ) : (
+                            <svg className="w-3.5 h-3.5 mx-auto" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M4 6h16M12 12h8M8 18h12"/></svg>
+                          )}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Font + Color row */}
+                    <div className="grid grid-cols-2 gap-2">
                       <div>
-                        <label className="block text-gray-555 uppercase mb-1.5">Font Family</label>
+                        <label className="block text-[10px] text-gray-400 uppercase tracking-wider mb-1">Font</label>
                         <select
                           value={activeTextLayer.fontFamily}
                           onChange={(e) => updateTextLayer("fontFamily", e.target.value)}
-                          className="w-full px-2 py-1 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 rounded"
+                          className="w-full px-2 py-1 border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 rounded-lg text-xs"
+                          style={{ fontFamily: activeTextLayer.fontFamily }}
                         >
-                          <option value="Impact">Impact</option>
-                          <option value="Arial">Arial</option>
-                          <option value="Comic Sans MS">Comic Sans</option>
-                          <option value="Georgia">Georgia</option>
-                          <option value="Courier New">Courier</option>
-                          <option value="Times New Roman">Times</option>
+                          <optgroup label="Meme Classics">
+                            <option value="Impact" style={{ fontFamily: "Impact" }}>Impact</option>
+                            <option value="Bangers" style={{ fontFamily: "Bangers" }}>Bangers</option>
+                            <option value="Comic Sans MS" style={{ fontFamily: "Comic Sans MS" }}>Comic Sans</option>
+                          </optgroup>
+                          <optgroup label="Modern">
+                            <option value="Poppins" style={{ fontFamily: "Poppins" }}>Poppins Bold</option>
+                            <option value="Oswald" style={{ fontFamily: "Oswald" }}>Oswald Bold</option>
+                            <option value="Pacifico" style={{ fontFamily: "Pacifico" }}>Pacifico</option>
+                          </optgroup>
+                          <optgroup label="Educational">
+                            <option value="Roboto Slab" style={{ fontFamily: "Roboto Slab" }}>Roboto Slab</option>
+                            <option value="Georgia" style={{ fontFamily: "Georgia" }}>Georgia</option>
+                          </optgroup>
+                          <optgroup label="System">
+                            <option value="Arial" style={{ fontFamily: "Arial" }}>Arial</option>
+                            <option value="Courier New" style={{ fontFamily: "Courier New" }}>Courier</option>
+                            <option value="Times New Roman" style={{ fontFamily: "Times New Roman" }}>Times</option>
+                          </optgroup>
                         </select>
                       </div>
-
                       <div>
-                        <label className="block text-gray-555 uppercase mb-1.5">Text Color</label>
+                        <label className="block text-[10px] text-gray-400 uppercase tracking-wider mb-1">Color</label>
                         <input
                           type="color"
                           value={activeTextLayer.color}
                           onChange={(e) => updateTextLayer("color", e.target.value)}
-                          className="w-full h-8 border cursor-pointer rounded p-0 bg-transparent"
+                          className="w-full h-8 border border-gray-200 cursor-pointer rounded-lg p-0 bg-transparent"
                         />
                       </div>
                     </div>
 
+                    {/* Font Size */}
                     <div>
-                      <label className="block text-gray-555 uppercase mb-1.5">Font Size ({activeTextLayer.fontSize}px)</label>
+                      <label className="flex justify-between text-[10px] text-gray-400 uppercase tracking-wider mb-1">
+                        <span>Size</span>
+                        <span className="text-purple-500 font-bold">{activeTextLayer.fontSize}px</span>
+                      </label>
                       <input
                         type="range"
                         min="10"
                         max="80"
                         value={activeTextLayer.fontSize}
                         onChange={(e) => updateTextLayer("fontSize", parseInt(e.target.value))}
-                        className="w-full accent-purple-650 h-1 bg-gray-200 rounded-lg cursor-pointer"
+                        className="w-full accent-purple-600 h-1 bg-gray-200 dark:bg-zinc-700 rounded-lg cursor-pointer"
                       />
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4">
-                      <div>
-                        <label className="block text-gray-555 uppercase mb-1.5">Stroke Shadow</label>
-                        <input
-                          type="color"
-                          value={activeTextLayer.strokeColor}
-                          onChange={(e) => updateTextLayer("strokeColor", e.target.value)}
-                          className="w-full h-8 border cursor-pointer rounded p-0 bg-transparent"
-                        />
+                    {/* Advanced options — collapsed by default */}
+                    <details className="group">
+                      <summary className="flex items-center justify-between cursor-pointer select-none text-[10px] text-gray-400 uppercase tracking-wider hover:text-purple-600 transition list-none">
+                        <span>Advanced</span>
+                        <svg className="w-3 h-3 transition group-open:rotate-180" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7"/></svg>
+                      </summary>
+                      <div className="mt-3 space-y-3 pt-3 border-t border-gray-100 dark:border-zinc-800">
+                        {/* Opacity */}
+                        <div>
+                          <label className="flex justify-between text-[10px] text-gray-400 uppercase tracking-wider mb-1">
+                            <span>Opacity</span>
+                            <span className="text-purple-500 font-bold">{Math.round((activeTextLayer.opacity ?? 1) * 100)}%</span>
+                          </label>
+                          <input
+                            type="range"
+                            min="0" max="1" step="0.05"
+                            value={activeTextLayer.opacity ?? 1}
+                            onChange={(e) => updateTextLayer("opacity", parseFloat(e.target.value))}
+                            className="w-full accent-purple-600 h-1 bg-gray-200 dark:bg-zinc-700 rounded-lg cursor-pointer"
+                          />
+                        </div>
+                        {/* Rotation */}
+                        <div>
+                          <label className="flex justify-between text-[10px] text-gray-400 uppercase tracking-wider mb-1">
+                            <span>Rotation</span>
+                            <span className="text-purple-500 font-bold">{activeTextLayer.rotation || 0}°</span>
+                          </label>
+                          <input
+                            type="range"
+                            min="-180" max="180" step="1"
+                            value={activeTextLayer.rotation || 0}
+                            onChange={(e) => updateTextLayer("rotation", parseInt(e.target.value))}
+                            className="w-full accent-purple-600 h-1 bg-gray-200 dark:bg-zinc-700 rounded-lg cursor-pointer"
+                          />
+                        </div>
+                        {/* Stroke */}
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[10px] text-gray-400 uppercase tracking-wider mb-1">Stroke</label>
+                            <input type="color" value={activeTextLayer.strokeColor} onChange={(e) => updateTextLayer("strokeColor", e.target.value)} className="w-full h-7 border border-gray-200 cursor-pointer rounded p-0 bg-transparent" />
+                          </div>
+                          <div>
+                            <label className="flex justify-between text-[10px] text-gray-400 uppercase tracking-wider mb-1">
+                              <span>Width</span>
+                              <span className="text-purple-500 font-bold">{activeTextLayer.strokeWidth}px</span>
+                            </label>
+                            <input type="range" min="0" max="6" value={activeTextLayer.strokeWidth} onChange={(e) => updateTextLayer("strokeWidth", parseInt(e.target.value))} className="w-full accent-purple-600 h-1 bg-gray-200 dark:bg-zinc-700 rounded-lg cursor-pointer" />
+                          </div>
+                        </div>
+                        {/* Text Wrap */}
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input type="checkbox" checked={!!activeTextLayer.maxWidth} onChange={(e) => updateTextLayer("maxWidth", e.target.checked ? 200 : null)} className="rounded accent-purple-600" />
+                          <span className="text-[10px] text-gray-500 uppercase">Wrap Text</span>
+                        </label>
+                        {activeTextLayer.maxWidth && (
+                          <div>
+                            <label className="flex justify-between text-[10px] text-gray-400 uppercase tracking-wider mb-1">
+                              <span>Max Width</span>
+                              <span className="text-purple-500 font-bold">{activeTextLayer.maxWidth}px</span>
+                            </label>
+                            <input type="range" min="60" max="440" step="10" value={activeTextLayer.maxWidth} onChange={(e) => updateTextLayer("maxWidth", parseInt(e.target.value))} className="w-full accent-purple-600 h-1 bg-gray-200 dark:bg-zinc-700 rounded-lg cursor-pointer" />
+                          </div>
+                        )}
                       </div>
-                      <div>
-                        <label className="block text-gray-555 uppercase mb-1.5">Stroke Width ({activeTextLayer.strokeWidth}px)</label>
-                        <input
-                          type="range"
-                          min="0"
-                          max="6"
-                          value={activeTextLayer.strokeWidth}
-                          onChange={(e) => updateTextLayer("strokeWidth", parseInt(e.target.value))}
-                          className="w-full accent-purple-650 h-1 bg-gray-200 rounded-lg cursor-pointer"
-                        />
-                      </div>
-                    </div>
+                    </details>
 
-                    <div className="pt-4 border-t border-gray-200 dark:border-zinc-800 flex justify-between">
-                      <button
-                        type="button"
-                        onClick={deleteSelectedText}
-                        className="text-red-600 hover:text-red-700 font-bold"
-                      >
-                        Delete Layer
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setSelectedTextId(null)}
-                        className="text-gray-500 hover:text-gray-700 dark:hover:text-gray-300"
-                      >
-                        Deselect
-                      </button>
+                    <div className="pt-3 border-t border-gray-100 dark:border-zinc-800 flex justify-between">
+                      <button type="button" onClick={deleteSelectedText} className="text-red-500 hover:text-red-600 font-semibold">Delete</button>
+                      <button type="button" onClick={duplicateSelectedText} className="text-purple-600 hover:text-purple-700 dark:text-purple-400 font-semibold">Duplicate</button>
+                      <button type="button" onClick={() => setSelectedTextId(null)} className="text-gray-400 hover:text-gray-600 font-semibold">Deselect</button>
                     </div>
                   </div>
                 ) : (
-                  <div className="text-center py-10 px-4 text-gray-400 text-xs border border-dashed border-gray-300 dark:border-zinc-700 rounded-xl bg-slate-50/50 dark:bg-zinc-900/50">
-                    💡 Click a text overlay on the canvas preview to edit its fonts, sizes, and colors directly.
+                  <div className="text-center py-8 px-4 text-gray-400 text-xs border border-dashed border-gray-200 dark:border-zinc-700 rounded-xl">
+                    Select a layer above to edit, or add a new one.
                   </div>
                 )}
               </div>
             )}
 
-            {/* TEMPLATES CONTROLS */}
-            {activeControlTab === "settings" && (
-              <div className="space-y-6">
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between border-b pb-2 border-gray-100 dark:border-zinc-800">
-                    <h3 className="font-bold text-xs uppercase tracking-wider text-purple-700 dark:text-purple-400">Browse Templates</h3>
-                  </div>
-                  {availableTemplates.length > 0 ? (
-                    <div className="grid grid-cols-2 gap-3 max-h-[240px] overflow-y-auto pr-1">
-                      {availableTemplates.map((temp) => (
-                        <button
-                          type="button"
-                          key={temp.id}
-                          onClick={() => handleSelectTemplate(temp)}
-                          className="flex flex-col items-center p-2 border border-gray-200 dark:border-zinc-800 rounded-xl hover:border-purple-500 hover:bg-purple-50/10 transition text-left w-full active:scale-95"
-                        >
-                          <div className="w-full aspect-video bg-black rounded-lg overflow-hidden flex items-center justify-center mb-1.5">
-                            {temp.format === "video" ? (
-                              <div className="text-white text-[10px] font-bold">🎥 Video Template</div>
-                            ) : temp.format === "audio" ? (
-                              <div className="text-white text-[10px] font-bold">🎵 Audio Template</div>
-                            ) : (
-                              <img src={temp.media_url} alt={temp.title} className="w-full h-full object-cover" />
-                            )}
-                          </div>
-                          <span className="text-[10px] font-bold truncate w-full text-center text-gray-700 dark:text-gray-300">{temp.title}</span>
-                        </button>
-                      ))}
-                    </div>
-                  ) : (
-                    <p className="text-gray-400 text-[11px] italic">No approved templates available yet. Contribute one below!</p>
-                  )}
-                </div>
 
-                <div className="border-t border-gray-200 dark:border-zinc-800 pt-4 space-y-4">
-                  <div className="flex items-center justify-between border-b pb-2 border-gray-100 dark:border-zinc-800">
-                    <h3 className="font-bold text-xs uppercase tracking-wider text-purple-700 dark:text-purple-400">Contribute Blank Template</h3>
-                  </div>
-                  <form onSubmit={handleTemplateUploadSubmit} className="space-y-4 text-xs font-semibold">
-                    
-                    {templateSuccess && (
-                      <div className="p-3 bg-purple-55 dark:bg-purple-955/20 text-purple-750 rounded-lg border text-[11px]">
-                        {templateSuccess}
-                      </div>
-                    )}
 
-                    <div>
-                      <label className="block text-gray-555 uppercase mb-1.5">Template Title</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Distracted Boyfriend Blank"
-                        value={templateTitle}
-                        onChange={(e) => setTemplateTitle(e.target.value)}
-                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
-                        required
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-gray-555 uppercase mb-1.5">Background Image/GIF File</label>
-                      <input
-                        type="file"
-                        accept="image/*,image/gif"
-                        onChange={(e) => setTemplateFile(e.target.files?.[0] || null)}
-                        className="block w-full text-[11px] file:mr-4 file:py-1.5 file:px-3 file:rounded-full file:border-0 file:text-[11px] file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100"
-                        required
-                      />
-                    </div>
-
-                    <button
-                      type="submit"
-                      disabled={templateLoading}
-                      className="w-full bg-purple-600 hover:bg-purple-700 text-white py-2 rounded-xl font-bold transition shadow-sm active:scale-95"
-                    >
-                      {templateLoading ? "Uploading..." : "Submit Template"}
-                    </button>
-                  </form>
-                </div>
-              </div>
-            )}
           </div>
         </div>
 
         {/* 2. RIGHT VIEWPORT WORKSPACE */}
-        <div className="flex-grow flex flex-col h-full min-w-0 bg-slate-100 dark:bg-zinc-950 overflow-hidden relative">
+        <div className={`flex-grow flex flex-col h-full min-w-0 overflow-hidden relative ${
+          highContrastMode ? "bg-zinc-950" : "bg-slate-50"
+        }`}>
           
-          {/* Top workspace bar containing Format Switcher & Save */}
-          <div className={`flex items-center justify-between px-6 py-3 border-b shrink-0 ${
+          {/* Canvas Controls Bar — aspect ratio + background colour */}
+          <div className={`flex flex-wrap items-center justify-between gap-2 px-4 py-2 border-b shrink-0 ${
             highContrastMode ? "bg-zinc-900 border-zinc-800" : "bg-white border-gray-200"
           }`}>
-            {/* Format Switcher */}
-            <div className={`flex p-1 rounded-xl space-x-1 ${
-              highContrastMode ? "bg-zinc-850" : "bg-gray-150"
-            }`}>
-              {["image", "video", "gif", "audio"].map((tab) => (
-                <button
-                  type="button"
-                  key={tab}
-                  onClick={() => { setActiveTab(tab); setAlertMessage(""); }}
-                  className={`px-4 py-1.5 text-xs font-bold capitalize rounded-lg transition ${
-                    activeTab === tab 
-                      ? (highContrastMode ? "bg-zinc-700 text-white shadow-sm" : "bg-white text-purple-700 shadow-sm") 
-                      : "text-gray-500 hover:text-gray-700 dark:text-gray-400"
-                  }`}
-                >
-                  {tab}
-                </button>
-              ))}
+            {/* Active format label */}
+            <div className="flex items-center gap-2">
+              <span className={`flex items-center gap-1 text-[11px] font-bold capitalize ${
+                highContrastMode ? "text-zinc-300" : "text-gray-700"
+              }`}>
+                {TAB_ICONS[activeTab]}
+                <span>{activeTab}</span>
+              </span>
             </div>
 
-            {/* Mobile Export button */}
+            {/* Canvas Controls — aspect ratio, background (image tab only) */}
+            {activeTab === "image" && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className={`flex p-0.5 rounded-lg gap-0.5 ${
+                  highContrastMode ? "bg-zinc-800" : "bg-gray-100"
+                }`}>
+                  {Object.keys(ASPECT_RATIOS).map(ratio => (
+                    <button
+                      key={ratio}
+                      type="button"
+                      onClick={() => setCanvasAspect(ratio)}
+                      title={`Canvas aspect ratio ${ratio}`}
+                      className={`px-2 py-1 text-[10px] font-bold rounded-md transition ${
+                        canvasAspect === ratio
+                          ? "bg-purple-600 text-white"
+                          : (highContrastMode ? "text-zinc-400 hover:text-white" : "text-gray-500 hover:text-gray-800")
+                      }`}
+                    >
+                      {ratio}
+                    </button>
+                  ))}
+                </div>
+
+                <label className="flex items-center gap-1.5 cursor-pointer" title="Canvas background color">
+                  <span className={`text-[10px] font-bold uppercase ${
+                    highContrastMode ? "text-zinc-400" : "text-gray-500"
+                  }`}>BG</span>
+                  <input
+                    type="color"
+                    value={canvasBg}
+                    onChange={(e) => setCanvasBg(e.target.value)}
+                    className="w-5 h-5 rounded cursor-pointer border border-gray-200 dark:border-zinc-700 p-0 bg-transparent"
+                  />
+                </label>
+              </div>
+            )}
+
+            {/* Mobile Export */}
             <button
               type="button"
               onClick={() => setShowSaveModal(true)}
-              className="bg-indigo-650 hover:bg-indigo-700 text-white font-bold py-1.5 px-4 rounded-lg shadow-sm transition text-xs flex items-center space-x-1.5 lg:hidden"
+              className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-1.5 px-3 rounded-lg shadow-sm transition text-xs flex items-center gap-1.5 lg:hidden"
             >
-              <span>💾 Export</span>
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}><path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+              Export
             </button>
           </div>
 
           {/* Drawing Workspace Canvas Container */}
           <div className="flex-grow overflow-y-auto flex flex-col items-center justify-center p-6 relative">
-            {/* Soft Checkerboard Background Pattern */}
+            {/* Subtle dot grid */}
             <div 
-              className="absolute inset-0 opacity-[0.25] pointer-events-none"
+              className={`absolute inset-0 pointer-events-none ${highContrastMode ? "opacity-[0.08]" : "opacity-[0.15]"}`}
               style={{
-                backgroundImage: highContrastMode 
-                  ? "radial-gradient(circle, #717172 1.2px, transparent 1.2px)" 
-                  : "radial-gradient(circle, #94a3b8 1.2px, transparent 1.2px)",
-                backgroundSize: "24px 24px"
+                backgroundImage: highContrastMode
+                  ? "radial-gradient(circle, #a78bfa 1px, transparent 1px)"
+                  : "radial-gradient(circle, #94a3b8 1px, transparent 1px)",
+                backgroundSize: "28px 28px"
               }}
             />
 
@@ -1530,11 +2352,12 @@ const Lab = () => {
             <div className="relative z-10 w-full flex flex-col items-center">
               <div 
                 ref={canvasContainerRef}
-                className={`relative w-full max-w-[480px] aspect-square flex items-center justify-center select-none shadow-xl border ${
+                className={`relative w-full max-w-[480px] ${ASPECT_RATIOS[canvasAspect]?.css || "aspect-square"} flex items-center justify-center select-none shadow-xl border ${
                   highContrastMode 
                     ? "bg-zinc-900 border-zinc-800" 
-                    : "bg-slate-900 border-slate-955"
+                    : "border-slate-955"
                 } rounded-2xl overflow-hidden`}
+                style={{ backgroundColor: canvasBg }}
               >
                 {/* Draggable Text Overlays Layer wrapper */}
                 <div className="absolute inset-0 z-20 pointer-events-none">
@@ -1543,7 +2366,7 @@ const Lab = () => {
                       key={layer.id}
                       onPointerDown={(e) => handleTextPointerDown(e, layer.id)}
                       onDoubleClick={() => setEditingTextId(layer.id)}
-                      style={{
+                    style={{
                         position: "absolute",
                         left: `${layer.x}px`,
                         top: `${layer.y}px`,
@@ -1552,7 +2375,12 @@ const Lab = () => {
                         color: layer.color,
                         WebkitTextStroke: `${layer.strokeWidth}px ${layer.strokeColor}`,
                         cursor: "move",
-                        whiteSpace: "nowrap"
+                        whiteSpace: layer.maxWidth ? "normal" : "nowrap",
+                        maxWidth: layer.maxWidth ? `${layer.maxWidth}px` : undefined,
+                        opacity: layer.opacity ?? 1,
+                        transform: layer.rotation ? `rotate(${layer.rotation}deg)` : undefined,
+                        textAlign: layer.textAlign || "left",
+                        transformOrigin: "top left",
                       }}
                       className={`pointer-events-auto px-2 py-1 rounded transition select-none ${
                         selectedTextId === layer.id 
@@ -1579,20 +2407,267 @@ const Lab = () => {
 
                 {/* Content rendering based on Active Tab */}
                 {activeTab === "image" && (
-                  <div className={`w-full h-full grid gap-1 ${
-                    images.length <= 1 ? "grid-cols-1" :
-                    images.length === 2 ? "grid-cols-2" :
-                    images.length === 3 ? "grid-cols-3" : "grid-cols-2 grid-rows-2"
-                  }`}>
+                  <div className="w-full h-full flex flex-col">
                     {images.length > 0 ? (
-                      images.map((src, idx) => (
-                        <img 
-                          key={idx} 
-                          src={src} 
-                          alt={`Collage slice ${idx}`} 
-                          className="w-full h-full object-cover" 
-                        />
-                      ))
+                      images.length === 1 ? (
+                        <div className="w-full h-full" style={{ userSelect: "none" }}>
+                          <img
+                            src={images[0]}
+                            alt="Meme visual component"
+                            style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                          />
+                        </div>
+                      ) : collageLayout === "columns" ? (
+                        <div className="w-full h-full flex" style={{ userSelect: "none" }}>
+                          {images.map((src, idx) => {
+                            const numImages = images.length;
+                            const activeSizes = panelSizes.slice(0, numImages);
+                            const totalWeight = activeSizes.reduce((a, b) => a + b, 0);
+                            const flexVal = activeSizes[idx] / totalWeight;
+                            const isLast = idx === numImages - 1;
+                            return (
+                              <React.Fragment key={idx}>
+                                <div
+                                  style={{ flexGrow: flexVal, flexShrink: 0, flexBasis: 0, minWidth: 0, position: "relative", overflow: "hidden" }}
+                                >
+                                  <img
+                                    src={src}
+                                    alt={`Collage panel ${idx + 1}`}
+                                    style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                                  />
+                                </div>
+                                {!isLast && (
+                                  <div
+                                    style={{
+                                      width: "6px",
+                                      flexShrink: 0,
+                                      cursor: "col-resize",
+                                      background: "rgba(139,92,246,0.4)",
+                                      zIndex: 25,
+                                      position: "relative"
+                                    }}
+                                    onPointerDown={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      const activeSizesNow = panelSizes.slice(0, images.length);
+                                      collageDragRef.current = {
+                                        active: true,
+                                        type: "columns",
+                                        dividerIdx: idx,
+                                        startX: e.clientX,
+                                        startSizes: [...activeSizesNow]
+                                      };
+                                      const containerW = canvasContainerRef.current?.offsetWidth || 480;
+                                      const onMove = (me) => {
+                                        if (!collageDragRef.current.active) return;
+                                        const dx = me.clientX - collageDragRef.current.startX;
+                                        const pxPerUnit = containerW / collageDragRef.current.startSizes.reduce((a, b) => a + b, 0);
+                                        const delta = dx / pxPerUnit;
+                                        const newSizes = [...collageDragRef.current.startSizes];
+                                        const minSize = 0.1;
+                                        newSizes[idx] = Math.max(minSize, newSizes[idx] + delta);
+                                        newSizes[idx + 1] = Math.max(minSize, newSizes[idx + 1] - delta);
+                                        setPanelSizes(prev => {
+                                          const updated = [...prev];
+                                          updated[idx] = newSizes[idx];
+                                          updated[idx + 1] = newSizes[idx + 1];
+                                          return updated;
+                                        });
+                                      };
+                                      const onUp = () => {
+                                        collageDragRef.current.active = false;
+                                        window.removeEventListener("pointermove", onMove);
+                                        window.removeEventListener("pointerup", onUp);
+                                      };
+                                      window.addEventListener("pointermove", onMove);
+                                      window.addEventListener("pointerup", onUp);
+                                    }}
+                                    title="Drag to resize columns"
+                                  >
+                                    <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 2, height: 24, background: "rgba(255,255,255,0.7)", borderRadius: 2 }} />
+                                  </div>
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </div>
+                      ) : collageLayout === "rows" ? (
+                        <div className="w-full h-full flex flex-col" style={{ userSelect: "none" }}>
+                          {images.map((src, idx) => {
+                            const numImages = images.length;
+                            const activeSizes = panelSizes.slice(0, numImages);
+                            const totalWeight = activeSizes.reduce((a, b) => a + b, 0);
+                            const flexVal = activeSizes[idx] / totalWeight;
+                            const isLast = idx === numImages - 1;
+                            return (
+                              <React.Fragment key={idx}>
+                                <div
+                                  style={{ flexGrow: flexVal, flexShrink: 0, flexBasis: 0, minHeight: 0, position: "relative", overflow: "hidden" }}
+                                >
+                                  <img
+                                    src={src}
+                                    alt={`Collage panel ${idx + 1}`}
+                                    style={{ width: "100%", height: "100%", objectFit: "contain", display: "block" }}
+                                  />
+                                </div>
+                                {!isLast && (
+                                  <div
+                                    style={{
+                                      height: "6px",
+                                      flexShrink: 0,
+                                      cursor: "row-resize",
+                                      background: "rgba(139,92,246,0.4)",
+                                      zIndex: 25,
+                                      position: "relative"
+                                    }}
+                                    onPointerDown={(e) => {
+                                      e.preventDefault();
+                                      e.stopPropagation();
+                                      const activeSizesNow = panelSizes.slice(0, images.length);
+                                      collageDragRef.current = {
+                                        active: true,
+                                        type: "rows",
+                                        dividerIdx: idx,
+                                        startY: e.clientY,
+                                        startSizes: [...activeSizesNow]
+                                      };
+                                      const containerH = canvasContainerRef.current?.offsetHeight || 480;
+                                      const onMove = (me) => {
+                                        if (!collageDragRef.current.active) return;
+                                        const dy = me.clientY - collageDragRef.current.startY;
+                                        const pxPerUnit = containerH / collageDragRef.current.startSizes.reduce((a, b) => a + b, 0);
+                                        const delta = dy / pxPerUnit;
+                                        const newSizes = [...collageDragRef.current.startSizes];
+                                        const minSize = 0.1;
+                                        newSizes[idx] = Math.max(minSize, newSizes[idx] + delta);
+                                        newSizes[idx + 1] = Math.max(minSize, newSizes[idx + 1] - delta);
+                                        setPanelSizes(prev => {
+                                          const updated = [...prev];
+                                          updated[idx] = newSizes[idx];
+                                          updated[idx + 1] = newSizes[idx + 1];
+                                          return updated;
+                                        });
+                                      };
+                                      const onUp = () => {
+                                        collageDragRef.current.active = false;
+                                        window.removeEventListener("pointermove", onMove);
+                                        window.removeEventListener("pointerup", onUp);
+                                      };
+                                      window.addEventListener("pointermove", onMove);
+                                      window.addEventListener("pointerup", onUp);
+                                    }}
+                                    title="Drag to resize rows"
+                                  >
+                                    <div style={{ position: "absolute", top: "50%", left: "50%", transform: "translate(-50%,-50%)", width: 24, height: 2, background: "rgba(255,255,255,0.7)", borderRadius: 2 }} />
+                                  </div>
+                                )}
+                              </React.Fragment>
+                            );
+                          })}
+                        </div>
+                      ) : collageLayout === "grid" && images.length === 4 ? (
+                        <div className="w-full h-full flex flex-col" style={{ userSelect: "none" }}>
+                          {/* Top Row */}
+                          <div style={{ height: `${gridSplit.y * 100}%`, flexShrink: 0, display: "flex", position: "relative", minHeight: 0 }}>
+                            <div style={{ width: `${gridSplit.topX * 100}%`, flexShrink: 0, position: "relative", height: "100%", overflow: "hidden" }}>
+                              <img src={images[0]} alt="Grid 1" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                            </div>
+                            
+                            {/* Vertical divider top */}
+                            <div
+                              style={{ width: "6px", cursor: "col-resize", background: "rgba(139,92,246,0.4)", zIndex: 25, position: "relative", flexShrink: 0 }}
+                              onPointerDown={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                collageDragRef.current = { active: true, type: "grid-v-top", startX: e.clientX, startSplit: { ...gridSplit } };
+                                const containerW = canvasContainerRef.current?.offsetWidth || 480;
+                                const onMove = (me) => {
+                                  if (!collageDragRef.current.active) return;
+                                  const dx = me.clientX - collageDragRef.current.startX;
+                                  const deltaRatio = dx / containerW;
+                                  setGridSplit(prev => ({ ...prev, topX: Math.max(0.1, Math.min(0.9, collageDragRef.current.startSplit.topX + deltaRatio)) }));
+                                };
+                                const onUp = () => {
+                                  collageDragRef.current.active = false;
+                                  window.removeEventListener("pointermove", onMove);
+                                  window.removeEventListener("pointerup", onUp);
+                                };
+                                window.addEventListener("pointermove", onMove);
+                                window.addEventListener("pointerup", onUp);
+                              }}
+                            />
+                            
+                            <div style={{ flexGrow: 1, position: "relative", height: "100%", overflow: "hidden" }}>
+                              <img src={images[1]} alt="Grid 2" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                            </div>
+                          </div>
+
+                          {/* Horizontal divider */}
+                          <div
+                            style={{ height: "6px", cursor: "row-resize", background: "rgba(139,92,246,0.4)", zIndex: 25, position: "relative", flexShrink: 0 }}
+                            onPointerDown={(e) => {
+                              e.preventDefault();
+                              e.stopPropagation();
+                              collageDragRef.current = { active: true, type: "grid-h", startY: e.clientY, startSplit: { ...gridSplit } };
+                              const containerH = canvasContainerRef.current?.offsetHeight || 480;
+                              const onMove = (me) => {
+                                  if (!collageDragRef.current.active) return;
+                                  const dy = me.clientY - collageDragRef.current.startY;
+                                  const deltaRatio = dy / containerH;
+                                  setGridSplit(prev => ({ ...prev, y: Math.max(0.1, Math.min(0.9, collageDragRef.current.startSplit.y + deltaRatio)) }));
+                                };
+                                const onUp = () => {
+                                  collageDragRef.current.active = false;
+                                  window.removeEventListener("pointermove", onMove);
+                                  window.removeEventListener("pointerup", onUp);
+                                };
+                                window.addEventListener("pointermove", onMove);
+                                window.addEventListener("pointerup", onUp);
+                              }}
+                            />
+
+                          {/* Bottom Row */}
+                          <div style={{ flexGrow: 1, display: "flex", position: "relative", minHeight: 0 }}>
+                            <div style={{ width: `${gridSplit.bottomX * 100}%`, flexShrink: 0, position: "relative", height: "100%", overflow: "hidden" }}>
+                              <img src={images[2]} alt="Grid 3" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                            </div>
+
+                            {/* Vertical divider bottom */}
+                            <div
+                              style={{ width: "6px", cursor: "col-resize", background: "rgba(139,92,246,0.4)", zIndex: 25, position: "relative", flexShrink: 0 }}
+                              onPointerDown={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                collageDragRef.current = { active: true, type: "grid-v-bottom", startX: e.clientX, startSplit: { ...gridSplit } };
+                                const containerW = canvasContainerRef.current?.offsetWidth || 480;
+                                const onMove = (me) => {
+                                  if (!collageDragRef.current.active) return;
+                                  const dx = me.clientX - collageDragRef.current.startX;
+                                  const deltaRatio = dx / containerW;
+                                  setGridSplit(prev => ({ ...prev, bottomX: Math.max(0.1, Math.min(0.9, collageDragRef.current.startSplit.bottomX + deltaRatio)) }));
+                                };
+                                const onUp = () => {
+                                  collageDragRef.current.active = false;
+                                  window.removeEventListener("pointermove", onMove);
+                                  window.removeEventListener("pointerup", onUp);
+                                };
+                                window.addEventListener("pointermove", onMove);
+                                window.addEventListener("pointerup", onUp);
+                              }}
+                            />
+
+                            <div style={{ flexGrow: 1, position: "relative", height: "100%", overflow: "hidden" }}>
+                              <img src={images[3]} alt="Grid 4" style={{ width: "100%", height: "100%", objectFit: "contain" }} />
+                            </div>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="w-full h-full flex" style={{ userSelect: "none" }}>
+                          {images.map((src, idx) => (
+                            <img key={idx} src={src} alt="Fallback Columns" className="flex-1 object-contain" />
+                          ))}
+                        </div>
+                      )
                     ) : (
                       <div className="flex flex-col items-center justify-center p-8 text-center text-gray-400 w-full h-full bg-slate-955/10">
                         {/* Premium "Start Creating" Empty State Illustration */}
@@ -1603,7 +2678,7 @@ const Lab = () => {
                         </div>
                         <p className="font-bold text-sm mb-1 text-gray-700 dark:text-gray-300">Start Creating Your Meme</p>
                         <p className="text-xs text-gray-500 max-w-xs">
-                          Drag & drop photos into the left panel dropzone, load templates, or add text overlays to begin.
+                          Drag &amp; drop photos into the left panel dropzone, load templates, or add text overlays to begin.
                         </p>
                       </div>
                     )}
@@ -1660,17 +2735,50 @@ const Lab = () => {
                 )}
 
                 {activeTab === "audio" && (
-                  <div className="w-full h-full flex flex-col items-center justify-center bg-gray-950 p-6 text-center text-white">
+                  <div className="w-full h-full flex flex-col items-center justify-center bg-gray-950 p-4 gap-3 overflow-y-auto">
                     {audioUrl ? (
                       <>
-                        <div className="text-4xl mb-3 animate-pulse">🎵</div>
-                        <p className="text-xs font-semibold mb-4 text-purple-455 uppercase tracking-wider">Audio Waveform Container</p>
+                        {/* Week 7: Live audiogram card preview */}
+                        <AudiogramCanvas
+                          ref={audiogramRef}
+                          audioFile={audioFile}
+                          audioUrl={audioUrl}
+                          title={title || "Untitled Audio Meme"}
+                          subject={subject === "Other" ? (customSubject || "General") : subject}
+                          creatorName={profile?.displayName || user?.email || "MemeClassroom"}
+                          bgColor={audiogramBgColor}
+                          accentColor={audiogramAccentColor}
+                        />
+                        {/* Audio player for trimming preview */}
                         <audio 
                           ref={audioPlayerRef}
                           src={audioUrl} 
                           controls 
-                          className="w-full max-w-xs" 
+                          className="w-full max-w-xs mt-1" 
                         />
+                        {/* Card colour controls */}
+                        <div className="flex items-center gap-4 text-white text-[10px] font-bold">
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <span className="uppercase tracking-wide">Card BG</span>
+                            <input
+                              type="color"
+                              value={audiogramBgColor}
+                              onChange={(e) => setAudiogramBgColor(e.target.value)}
+                              className="w-6 h-6 rounded cursor-pointer border-0 p-0 bg-transparent"
+                              title="Audiogram background colour"
+                            />
+                          </label>
+                          <label className="flex items-center gap-1.5 cursor-pointer">
+                            <span className="uppercase tracking-wide">Waveform</span>
+                            <input
+                              type="color"
+                              value={audiogramAccentColor}
+                              onChange={(e) => setAudiogramAccentColor(e.target.value)}
+                              className="w-6 h-6 rounded cursor-pointer border-0 p-0 bg-transparent"
+                              title="Waveform bar colour"
+                            />
+                          </label>
+                        </div>
                       </>
                     ) : (
                       <div className="flex flex-col items-center justify-center p-8 text-center text-gray-400 w-full h-full bg-slate-955/10">
@@ -1681,7 +2789,7 @@ const Lab = () => {
                         </div>
                         <p className="font-bold text-sm mb-1 text-gray-700 dark:text-gray-300">Audio Workspace Empty</p>
                         <p className="text-xs text-gray-500 max-w-xs">
-                          Upload background MP3 audio files or load a pre-set sample to enable audio output.
+                          Upload an MP3/audio file or load a sample — a shareable audiogram card will be generated automatically.
                         </p>
                       </div>
                     )}
@@ -1700,13 +2808,72 @@ const Lab = () => {
 {/* SAVE MODAL DIALOG */}
       {showSaveModal && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
-          <div className={`w-full max-w-md p-6 rounded-xl overflow-y-auto max-h-[90vh] ${containerClass}`}>
-            <h2 className="text-lg font-bold mb-2">Help Us Expand Our Library!</h2>
-            <p className="text-xs text-gray-500 mb-6">
-              Contribute your creation to the public catalog to earn a contributor badge and share pedagogical concepts.
+          <div className={`w-full max-w-lg p-6 rounded-xl overflow-y-auto max-h-[90vh] ${containerClass}`}>
+            <h2 className="text-lg font-bold mb-1">Export & Publish Meme Studio</h2>
+            <p className="text-xs text-gray-500 mb-5">
+              Review your visual composition draft and download it locally, or enter details to publish to the community library.
             </p>
 
-            <div className="space-y-4 text-xs font-semibold mb-6">
+            {/* Visual Draft Preview */}
+            <div className="mb-5 bg-gray-55 dark:bg-zinc-950/60 rounded-xl p-3 border border-gray-150 dark:border-zinc-800 flex flex-col items-center justify-center">
+              <span className="block text-[10px] font-bold text-gray-400 uppercase mb-2 tracking-wider">Meme Composition Draft</span>
+              <div className="w-56 aspect-video rounded-lg overflow-hidden border border-gray-250 dark:border-zinc-800 bg-white dark:bg-zinc-900 flex items-center justify-center relative shadow-sm">
+                {activeTab === "image" && images.length > 0 ? (
+                  <div className="w-full h-full flex flex-wrap">
+                    {images.map((src, idx) => (
+                      <img key={idx} src={src} className="flex-1 object-cover min-w-[50%] h-full" alt="preview" />
+                    ))}
+                  </div>
+                ) : activeTab === "gif" && gifUrl ? (
+                  <img src={gifUrl} className="w-full h-full object-contain" alt="preview" />
+                ) : activeTab === "video" && videoUrl ? (
+                  <video src={videoUrl} className="w-full h-full object-contain" />
+                ) : activeTab === "audio" && audioUrl ? (
+                  <div className="text-center p-4 text-gray-500 text-xs">
+                    <span className="text-3xl block mb-1">🎵</span>
+                    Audio Waveform Card
+                  </div>
+                ) : (
+                  <div className="text-gray-405 text-xs italic">Empty Canvas</div>
+                )}
+                
+                {/* Simulated text overlays on top of the preview */}
+                {textLayers.length > 0 && (
+                  <div className="absolute inset-0 flex flex-col items-center justify-between p-2 pointer-events-none bg-black/10">
+                    <div className="bg-black/60 text-white text-[8px] font-bold px-1.5 py-0.5 rounded shadow">
+                      {textLayers[0].text.length > 20 ? `${textLayers[0].text.substring(0, 20)}...` : textLayers[0].text}
+                    </div>
+                    {textLayers.length > 1 && (
+                      <div className="bg-black/60 text-white text-[8px] font-bold px-1.5 py-0.5 rounded shadow">
+                        {textLayers[1].text.length > 20 ? `${textLayers[1].text.substring(0, 20)}...` : textLayers[1].text}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {/* Quick Download Only / Local Export (Before the form) */}
+            <div className="mb-5 bg-purple-50/50 dark:bg-purple-955/20 p-4 rounded-xl border border-purple-200 dark:border-purple-800/40 text-center">
+              <span className="block text-[10px] text-purple-700 dark:text-purple-300 font-bold mb-2 uppercase tracking-wider">Just want the file locally?</span>
+              <button
+                type="button"
+                onClick={() => handlePublishSubmit(false)}
+                disabled={loading}
+                className="w-full bg-purple-600 hover:bg-purple-750 text-white font-bold py-2.5 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-1.5 shadow-md shadow-purple-500/10"
+              >
+                <span>📥</span>
+                <span>Download Only (Bypass Publish Details)</span>
+              </button>
+            </div>
+
+            <div className="flex items-center my-5">
+              <div className="flex-grow border-t border-gray-200 dark:border-zinc-800" />
+              <span className="px-3 text-[10px] text-gray-400 font-bold uppercase tracking-wider">Or Publish to Library</span>
+              <div className="flex-grow border-t border-gray-200 dark:border-zinc-800" />
+            </div>
+
+            <div className={`space-y-4 text-xs font-semibold mb-6 ${!user ? "opacity-50 pointer-events-none select-none" : ""}`}>
               <div>
                 <label className="block text-gray-500 uppercase mb-1">Meme Title</label>
                 <input
@@ -1810,37 +2977,53 @@ const Lab = () => {
                 </div>
               </div>
 
-              <div>
-                <span className="text-[10px] text-gray-400 block mb-2 font-normal">
-                  Note: Separate keywords with comma. These keywords will be indexed to enable a smooth search and filtering.
-                </span>
-                <label className="flex items-center space-x-2 py-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={publishToLibrary}
-                    onChange={(e) => setPublishToLibrary(e.target.checked)}
-                    className="rounded text-purple-600 focus:ring-purple-500 h-4 w-4"
-                  />
-                  <span>Publish this meme to the public library gallery</span>
-                </label>
-              </div>
             </div>
 
-            <div className="flex justify-end space-x-3">
-              <button
-                onClick={() => setShowSaveModal(false)}
-                className={cancelBtnClass}
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handlePublishSubmit}
-                disabled={loading}
-                className={btnClass}
-              >
-                {loading ? "Saving..." : "Confirm & Save"}
-              </button>
-            </div>
+            {/* Clearer Call-To-Action (CTA) Grid */}
+            {user ? (
+              <div className="flex flex-col gap-2 mt-6 border-t pt-4 border-gray-100 dark:border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => handlePublishSubmit(true)}
+                  disabled={loading}
+                  className="w-full bg-purple-650 hover:bg-purple-755 text-white font-bold py-2.5 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-1.5 shadow-md shadow-purple-500/10"
+                >
+                  <span>🚀</span>
+                  <span>Publish to Library & Download</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowSaveModal(false)}
+                  className="w-full text-[10px] text-gray-400 hover:text-gray-500 font-bold py-1.5 text-center mt-1.5 transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-2 mt-6 border-t pt-4 border-gray-100 dark:border-zinc-800 text-center">
+                <p className="text-[11px] text-gray-500 mb-2">
+                  To publish your meme to the community library and earn points, please sign in.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowSaveModal(false);
+                    navigate("/auth");
+                  }}
+                  className="w-full bg-purple-605 hover:bg-purple-755 text-white font-bold py-2.5 rounded-xl text-xs transition active:scale-95 flex items-center justify-center gap-1.5 shadow-md shadow-purple-500/10"
+                >
+                  <span>🔑</span>
+                  <span>Sign In to Publish</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowSaveModal(false)}
+                  className="w-full text-[10px] text-gray-400 hover:text-gray-500 font-bold py-1.5 text-center mt-1.5 transition"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1851,31 +3034,36 @@ const Lab = () => {
           <div className={`w-full max-w-xl p-6 rounded-xl ${containerClass} overflow-y-auto max-h-[85vh]`}>
             <div className="flex justify-between items-center border-b pb-3 mb-4">
               <h2 className="text-lg font-bold">Meme Studio Guidelines & Tutorial</h2>
-              <button onClick={() => setShowTutorialModal(false)} className="text-gray-400 hover:text-gray-500 font-bold text-lg">
+              <button onClick={() => setShowTutorialModal(false)} className="text-gray-400 hover:text-gray-550 font-bold text-lg">
                 ✕
               </button>
             </div>
 
-            <div className="space-y-4 text-sm text-gray-650 dark:text-gray-300">
+            <div className="space-y-4 text-xs text-gray-650 dark:text-gray-300">
+              <div className="bg-purple-50 dark:bg-purple-950/20 p-4 rounded-xl border border-purple-200 dark:border-purple-800/40">
+                <h3 className="font-bold text-purple-750 dark:text-purple-300 mb-1 text-sm">💡 Quick Studio Tutorial</h3>
+                <ol className="list-decimal list-inside space-y-2 mt-2">
+                  <li><strong>Choose Workspace Tab:</strong> Select <strong>Image</strong> (supports collages), <strong>Video</strong>, <strong>GIF</strong>, or <strong>Audio</strong> at the top of the canvas workbench.</li>
+                  <li><strong>Add Media Assets:</strong> Browse the <strong>Library Templates</strong>, upload custom files via the drag-and-drop dropzone, or click <strong>Remix from Library</strong> to import public memes.</li>
+                  <li><strong>Add Text & Styles:</strong> Click the <strong>Text</strong> tab in the sidebar. Select layers to change font sizes, alignments, opacity, and rotation angles. You can drag text directly on the canvas.</li>
+                  <li><strong>Save & Export:</strong> Click the <strong>Save</strong> button on the top right. Download the file locally, or check the box to publish and share it with the community!</li>
+                </ol>
+              </div>
+
               <div>
-                <h3 className="font-bold text-purple-750 dark:text-purple-400 mb-1">1. Pedagogical Alignment Methodology</h3>
-                <p className="text-xs">
-                  A high-pedagogy meme does not just make jokes; it visually aligns content elements to bridge humor with real cognitive recall. Try mapping dry vocabulary to punchy overlay text overlays.
+                <h3 className="font-bold text-purple-750 dark:text-purple-400 mb-1">Pedagogical Curation Standards</h3>
+                <p className="text-xs text-gray-500">
+                  A high-pedagogy meme visually aligns content elements to bridge humor with real educational cognitive recall. Avoid distraction: make sure formulas, dates, and terminology are factually correct.
                 </p>
               </div>
 
               <div>
-                <h3 className="font-bold text-purple-750 dark:text-purple-400 mb-1">2. Appropriateness Checklist</h3>
-                <ul className="list-disc list-inside text-xs space-y-1">
-                  <li>**Language**: Verify all overlays are appropriate for grade school classrooms.</li>
-                  <li>**Copyright**: Use the template upload pipeline to contribute free-to-use blanks.</li>
-                  <li>**Accuracy**: Ensure scientific formulas or historical timelines are factual.</li>
+                <h3 className="font-bold text-purple-750 dark:text-purple-400 mb-1">Appropriateness Checklist</h3>
+                <ul className="list-disc list-inside text-xs space-y-1 text-gray-500">
+                  <li><strong>Appropriateness:</strong> Ensure all text overlays are clean and suitable for classrooms.</li>
+                  <li><strong>Privacy:</strong> Do not upload photos of students without parental consent.</li>
+                  <li><strong>Source:</strong> Verify that custom template backgrounds are free of copyright restrictions.</li>
                 </ul>
-              </div>
-
-              <div className="border border-gray-250 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 rounded-lg p-6 text-center text-xs">
-                <span className="block font-bold mb-1 text-gray-500">Instructional Video Embed Tutorial</span>
-                <span className="text-[11px] text-gray-400">Admin instructional video player slot will load here.</span>
               </div>
             </div>
 
@@ -1890,6 +3078,259 @@ const Lab = () => {
           </div>
         </div>
       )}
+
+      {/* MEME STORY MODAL */}
+      {memeStoryModal.open && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm z-[60] flex items-center justify-center p-4"
+          onClick={() => setMemeStoryModal({ open: false, story: null, template: null, loading: false })}
+        >
+          <div
+            className="w-full max-w-md rounded-2xl overflow-hidden shadow-2xl border border-amber-200/30 dark:border-amber-700/30 bg-gradient-to-b from-amber-50 to-white dark:from-zinc-900 dark:to-zinc-950"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* Book-themed header */}
+            <div className="bg-gradient-to-r from-amber-600 to-amber-500 px-5 py-4 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <span className="text-2xl">📖</span>
+                <div>
+                  <h3 className="text-white font-extrabold text-sm">About This Meme</h3>
+                  {memeStoryModal.template && (
+                    <p className="text-amber-100 text-[10px] font-semibold mt-0.5">{memeStoryModal.template.title}</p>
+                  )}
+                </div>
+              </div>
+              <button
+                onClick={() => setMemeStoryModal({ open: false, story: null, template: null, loading: false })}
+                className="text-white/80 hover:text-white text-xl font-bold leading-none transition"
+              >
+                ×
+              </button>
+            </div>
+
+            <div className="p-5 space-y-4 max-h-[65vh] overflow-y-auto">
+              {memeStoryModal.loading ? (
+                <div className="flex flex-col items-center justify-center py-10 text-amber-600">
+                  <div className="w-8 h-8 border-4 border-amber-300 border-t-amber-600 rounded-full animate-spin mb-3" />
+                  <p className="text-xs font-semibold text-gray-500">Fetching the story...</p>
+                </div>
+              ) : memeStoryModal.story ? (
+                <>
+                  {/* Meme name */}
+                  {memeStoryModal.story.meme_name && (
+                    <div className="flex items-center gap-2">
+                      <span className="bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-xs font-extrabold px-3 py-1 rounded-full border border-amber-200 dark:border-amber-700">
+                        🎭 {memeStoryModal.story.meme_name}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Origin Story / Background section */}
+                  {memeStoryModal.story.body && (
+                    <div className="bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/50 rounded-xl p-4">
+                      <h4 className="text-[10px] font-extrabold uppercase tracking-wider text-amber-700 dark:text-amber-400 mb-2 flex items-center gap-1">
+                        <span>📜</span> Background
+                      </h4>
+                      <div className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">
+                        {/* Show Read Full Story toggle for long content */}
+                        {memeStoryModal.story.body.length > 280 && !storyExpanded
+                          ? <>
+                              <p>{memeStoryModal.story.body.slice(0, 280)}...</p>
+                              <button
+                                onClick={() => setStoryExpanded(true)}
+                                className="text-amber-600 dark:text-amber-400 font-bold hover:underline mt-1 text-[10px]"
+                              >
+                                Read Full Story ↓
+                              </button>
+                            </>
+                          : <p className="whitespace-pre-wrap">{memeStoryModal.story.body}</p>
+                        }
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Typical Meaning & Usage section */}
+                  {memeStoryModal.story.usage_context && (
+                    <div className="bg-indigo-50 dark:bg-indigo-950/20 border border-indigo-200 dark:border-indigo-800/50 rounded-xl p-4">
+                      <h4 className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-700 dark:text-indigo-400 mb-2 flex items-center gap-1">
+                        <span>💡</span> Typical Meaning & Usage
+                      </h4>
+                      <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{memeStoryModal.story.usage_context}</p>
+                    </div>
+                  )}
+
+                  {/* Educational Use section */}
+                  {memeStoryModal.story.educational_use && (
+                    <div className="bg-emerald-50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/50 rounded-xl p-4">
+                      <h4 className="text-[10px] font-extrabold uppercase tracking-wider text-emerald-700 dark:text-emerald-400 mb-2 flex items-center gap-1">
+                        <span>🎓</span> Educational Use
+                      </h4>
+                      <p className="text-xs text-gray-700 dark:text-gray-300 leading-relaxed">{memeStoryModal.story.educational_use}</p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                /* No story yet state */
+                <div className="text-center py-8 space-y-3">
+                  <div className="text-4xl">📭</div>
+                  <p className="text-sm font-bold text-gray-700 dark:text-gray-300">No story added yet</p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Know this meme? Contribute its story to help others!</p>
+                </div>
+              )}
+            </div>
+
+            {/* Footer */}
+            <div className="px-5 pb-5 pt-2 flex items-center justify-between border-t border-amber-100 dark:border-zinc-800 mt-1">
+              <a
+                href="/resources?tab=stories"
+                className="text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:underline"
+              >
+                📚 Read More on Resources →
+              </a>
+              <button
+                onClick={() => setMemeStoryModal({ open: false, story: null, template: null, loading: false })}
+                className="bg-amber-500 hover:bg-amber-600 text-white font-bold text-xs px-4 py-1.5 rounded-lg transition active:scale-95"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* TEMPLATE CONTRIBUTION MODAL */}
+      {showContributeModal && (
+        <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
+          <div className={`w-full max-w-md p-6 rounded-xl overflow-y-auto max-h-[90vh] ${containerClass}`}>
+            <div className="flex items-center justify-between border-b pb-2 mb-4 border-gray-150 dark:border-zinc-800">
+              <h3 className="font-bold text-sm uppercase tracking-wider text-purple-700 dark:text-purple-400">Contribute Template to Library</h3>
+              <button 
+                type="button" 
+                onClick={() => { setShowContributeModal(false); setTemplateSuccess(""); setIncludeStory(false); setStoryOrigin(""); setStoryUsageContext(""); setStoryEducationalUse(""); }} 
+                className="text-gray-400 hover:text-gray-600 text-sm font-bold"
+              >
+                ✕
+              </button>
+            </div>
+            <form onSubmit={handleTemplateUploadSubmit} className="space-y-4 text-xs font-semibold">
+              {templateSuccess && (
+                <div className="p-3 bg-purple-50 dark:bg-purple-955/25 text-purple-750 dark:text-purple-300 rounded-lg border">
+                  {templateSuccess}
+                </div>
+              )}
+              <div>
+                <label className="block text-gray-500 uppercase mb-1.5">Template/Meme Name *</label>
+                <input
+                  type="text"
+                  placeholder="e.g. Winnie the Pooh Reading a Paper"
+                  value={templateTitle}
+                  onChange={(e) => setTemplateTitle(e.target.value)}
+                  className="w-full px-3 py-2 border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 rounded-lg focus:ring-2 focus:ring-purple-500 outline-none"
+                  required
+                />
+              </div>
+              <div>
+                <label className="block text-gray-500 uppercase mb-1.5">Upload File (Image/GIF/Video/Audio)</label>
+                <input
+                  type="file"
+                  accept="image/*,video/*,audio/*"
+                  onChange={(e) => setTemplateFile(e.target.files?.[0] || null)}
+                  className="block w-full text-xs file:mr-3 file:py-1.5 file:px-3 file:rounded-full file:border-0 file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100"
+                  required
+                />
+              </div>
+
+              {/* ── Meme Story toggle section ── */}
+              <div className="border border-amber-200 dark:border-amber-800/50 rounded-xl p-4 bg-amber-50/50 dark:bg-amber-950/10 space-y-3">
+                <div className="flex items-start justify-between">
+                  <div>
+                    <p className="font-bold text-gray-700 dark:text-gray-200 text-xs">📖 Add the background story of this meme?</p>
+                    <p className="text-[10px] text-gray-500 mt-0.5">Help other users understand the meme's origin and context.</p>
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="includeStory"
+                      checked={!includeStory}
+                      onChange={() => setIncludeStory(false)}
+                      className="accent-amber-500"
+                    />
+                    <span className="text-[11px] font-semibold text-gray-600 dark:text-gray-400">No, skip</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="includeStory"
+                      checked={includeStory}
+                      onChange={() => setIncludeStory(true)}
+                      className="accent-amber-500"
+                    />
+                    <span className="text-[11px] font-semibold text-amber-700 dark:text-amber-400">Yes, add story</span>
+                  </label>
+                </div>
+
+                {includeStory && (
+                  <div className="space-y-3 pt-2 border-t border-amber-200 dark:border-amber-800/40">
+                    <div>
+                      <label className="block text-gray-500 uppercase mb-1">Background</label>
+                      <textarea
+                        placeholder="Where did this template originate? Mention the source (movie, TV show, game, etc.) and how it became popular."
+                        value={storyOrigin}
+                        onChange={(e) => setStoryOrigin(e.target.value)}
+                        rows={3}
+                        className="w-full px-3 py-2 border border-amber-200 dark:border-amber-800/50 bg-white dark:bg-gray-900 rounded-lg focus:ring-2 focus:ring-amber-400 outline-none resize-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 uppercase mb-1">Typical Meaning & Usage</label>
+                      <textarea
+                        placeholder="Used to express confusion while reading something complicated or reacting to unexpected information."
+                        value={storyUsageContext}
+                        onChange={(e) => setStoryUsageContext(e.target.value)}
+                        rows={2}
+                        className="w-full px-3 py-2 border border-amber-200 dark:border-amber-800/50 bg-white dark:bg-gray-900 rounded-lg focus:ring-2 focus:ring-amber-400 outline-none resize-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-gray-500 uppercase mb-1">Educational Use</label>
+                      <textarea
+                        placeholder="Suggest classroom situations where this template can be used. E.g. Assignment instructions"
+                        value={storyEducationalUse}
+                        onChange={(e) => setStoryEducationalUse(e.target.value)}
+                        rows={2}
+                        className="w-full px-3 py-2 border border-amber-200 dark:border-amber-800/50 bg-white dark:bg-gray-900 rounded-lg focus:ring-2 focus:ring-amber-400 outline-none resize-none"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={templateLoading}
+                className="w-full bg-purple-600 hover:bg-purple-700 text-white py-2.5 rounded-xl font-bold transition shadow-sm active:scale-95"
+              >
+                {templateLoading ? "Uploading..." : "Submit Template"}
+              </button>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* LIBRARY PICKER MODAL */}
+      <LibraryPickerModal
+        isOpen={showLibraryPickerModal}
+        onClose={() => setShowLibraryPickerModal(false)}
+        onSelect={(mediaUrl) => {
+          if (images.length >= 4) {
+            setAlertMessage("You can only add up to 4 images to the collage.");
+            return;
+          }
+          setImages(prev => [...prev, mediaUrl]);
+        }}
+      />
 
     </div>
   );
