@@ -25,6 +25,23 @@ import { useUserModal } from "../context/UserModalContext";
 import { SUBJECTS, GRADE_GROUPS } from "../constants/taxonomy";
 
 import { trackCustomSubmission } from "../utils/taxonomyUtils";
+import {
+  Search,
+  Flame,
+  Trophy,
+  Star,
+  Image,
+  Video,
+  Smile,
+  MoreVertical,
+  Heart,
+  MessageSquare,
+  Download,
+  Bookmark,
+  Sparkles,
+  Music,
+  X
+} from "lucide-react";
 
 const Library = () => {
   const { user, profile } = useAuth();
@@ -61,6 +78,7 @@ const Library = () => {
 
   // Likes map for the current user
   const [userLikesMap, setUserLikesMap] = useState({});
+  const [userSavesMap, setUserSavesMap] = useState({});
 
   // Direct Upload fields
   const [uploadTitle, setUploadTitle] = useState("");
@@ -350,6 +368,24 @@ const Library = () => {
       setUserLikesMap(map);
     }, (error) => {
       console.error("User likes subscription failed:", error);
+    });
+    return () => unsubscribe();
+  }, [user]);
+
+  // Real-time Saves/Bookmarks list for the user (mapped to dedicated 'saves' collection)
+  useEffect(() => {
+    if (!user) return;
+    const savesCol = collection(db, "saves");
+    const q = query(savesCol, where("user_id", "==", user.uid));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const map = {};
+      snapshot.forEach((doc) => {
+        const data = doc.data();
+        map[data.meme_id] = doc.id;
+      });
+      setUserSavesMap(map);
+    }, (error) => {
+      console.error("User saves subscription failed:", error);
     });
     return () => unsubscribe();
   }, [user]);
@@ -655,6 +691,34 @@ const Library = () => {
     }
   };
 
+  // Save/Bookmark toggle logic
+  const handleSaveToggle = async (meme) => {
+    if (!user) {
+      showLibToast("Please log in to save memes to your bookmarks.", "info");
+      return;
+    }
+    const existingSaveId = userSavesMap[meme.id];
+    try {
+      if (existingSaveId) {
+        // Remove bookmark
+        await deleteDoc(doc(db, "saves", existingSaveId));
+        showLibToast("Meme removed from your bookmarks.", "success");
+      } else {
+        // Save bookmark
+        const saveDocId = `${user.uid}_${meme.id}`;
+        await setDoc(doc(db, "saves", saveDocId), {
+          user_id: user.uid,
+          meme_id: meme.id,
+          created_at: serverTimestamp()
+        });
+        showLibToast("Meme saved to your bookmarks!", "success");
+      }
+    } catch (e) {
+      console.error("Save toggle failed", e);
+      showLibToast("Failed to update bookmark. Please try again.", "error");
+    }
+  };
+
   // 6. Ratings Tracker: Submit 1-to-5 star evaluation on 4 criteria
   const handleRateSubmit = async (criteria, score) => {
     if (!user || !activeMeme) return;
@@ -949,7 +1013,7 @@ const Library = () => {
           }}
           className="flex-grow max-w-md flex items-center bg-white dark:bg-zinc-900 px-4 py-1.5 rounded-full border border-gray-200 dark:border-zinc-800 shadow-md dark:shadow-black/25 focus-within:shadow-lg focus-within:shadow-purple-500/10 dark:focus-within:shadow-black/40 focus-within:ring-2 focus-within:ring-purple-500 transition-all duration-300"
         >
-          <span className="text-gray-400 mr-2">🔍</span>
+          <Search className="w-4 h-4 text-gray-400 mr-2" />
           <input
             type="text"
             placeholder="Search memes, topics or keywords..."
@@ -973,7 +1037,7 @@ const Library = () => {
             type="submit"
             className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs p-2 rounded-full transition flex items-center justify-center w-8 h-8 shrink-0"
           >
-            🔍
+            <Search className="w-4 h-4" />
           </button>
         </form>
       </div>
@@ -987,7 +1051,7 @@ const Library = () => {
           }}
           className={`px-4 py-1.5 rounded-full text-xs font-bold transition flex items-center gap-1.5 ${(!subjectFilter && !appliedSearchQuery) ? "bg-purple-100 text-purple-750 dark:bg-purple-950/40 dark:text-purple-300" : "bg-white dark:bg-zinc-900 text-gray-500 hover:bg-gray-50 border border-gray-200 dark:border-zinc-800"}`}
         >
-          🔥 Trending
+          <Flame className="w-3.5 h-3.5 text-orange-500 animate-pulse" /> Trending
         </button>
         {["Exams", "Teachers", "Assignments", "Science", "Coding", "Relatable"].map((tag) => {
           const isActive = subjectFilter === tag || appliedSearchQuery === tag;
@@ -1041,7 +1105,7 @@ const Library = () => {
               <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Subject</label>
               <input
                 type="text"
-                placeholder="🔍 Search subject..."
+                placeholder="Search subject..."
                 value={filterSubjectSearch}
                 onChange={(e) => setFilterSubjectSearch(e.target.value)}
                 className="w-full px-2 py-1 mb-1 border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 rounded text-[10px]"
@@ -1078,7 +1142,7 @@ const Library = () => {
               <label className="block text-[10px] font-semibold text-gray-400 uppercase mb-1">Language</label>
               <input
                 type="text"
-                placeholder="🔍 Search language..."
+                placeholder="Search language..."
                 value={filterLanguageSearch}
                 onChange={(e) => setFilterLanguageSearch(e.target.value)}
                 className="w-full px-2 py-1 mb-1 border border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-900 rounded text-[10px]"
