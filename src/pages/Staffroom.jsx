@@ -26,6 +26,21 @@ import { useUserModal } from "../context/UserModalContext";
 import { SUBJECTS, GRADE_GROUPS } from "../constants/taxonomy";
 import { useToast } from "../components/ToastNotification";
 import ConfirmDialog from "../components/ConfirmDialog";
+import { 
+  ThumbsUp, 
+  MessageSquare, 
+  Bookmark, 
+  Flag, 
+  Paperclip, 
+  ShieldCheck, 
+  Check, 
+  BookOpen, 
+  HelpCircle, 
+  BarChart3, 
+  Vote, 
+  Send,
+  Music
+} from "lucide-react";
 
 // ── Static admin cache entry ──────────────────────────────────────────────────
 const ADMIN_CACHE_ENTRY = {
@@ -970,8 +985,9 @@ const Staffroom = () => {
 
     return (
       <div className="mt-3 space-y-3 bg-gray-50/50 dark:bg-zinc-950 p-4 rounded-xl border border-gray-150 dark:border-zinc-800">
-        <span className="block text-[10px] font-extrabold uppercase tracking-wide text-purple-600 dark:text-purple-400 mb-1">
-          📊 Classroom Poll ({totalVotes} total {totalVotes === 1 ? "vote" : "votes"})
+        <span className="flex items-center gap-1.5 text-[10px] font-extrabold uppercase tracking-wide text-purple-600 dark:text-purple-400 mb-2">
+          <BarChart3 className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+          Classroom Poll ({totalVotes} total {totalVotes === 1 ? "vote" : "votes"})
         </span>
         <div className="space-y-2.5 text-left">
           {options.map((option, idx) => {
@@ -985,7 +1001,7 @@ const Staffroom = () => {
                   className="w-full text-left text-xs font-semibold px-4 py-2.5 rounded-lg border border-gray-200 dark:border-zinc-800 bg-white dark:bg-zinc-900 hover:border-purple-600 dark:hover:border-purple-500 transition duration-150 flex items-center justify-between"
                 >
                   <span>{option}</span>
-                  <span className="text-gray-400">🗳️</span>
+                  <Vote className="w-4 h-4 text-gray-400 dark:text-gray-500" />
                 </button>
               );
             }
@@ -1284,33 +1300,33 @@ const Staffroom = () => {
 
           {/* Composer shortcut bar */}
           {user && (
-            <div className={`p-4 ${containerClass}`}>
+            <div className="p-5 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.06)] hover:shadow-[0_8px_30px_-6px_rgba(0,0,0,0.1)] border border-gray-250 dark:border-zinc-800 bg-white dark:bg-zinc-900 rounded-2xl transition-all duration-300">
               <div className="flex items-center gap-3">
                 <img
                   src={profile?.avatar_url || `/avatar${(user.uid.length % 5) + 1}.png`}
                   alt="My Avatar"
-                  className="w-9 h-9 rounded-full border shadow-sm object-cover cursor-pointer hover:opacity-90"
+                  className="w-9 h-9 rounded-full border shadow-sm object-cover cursor-pointer hover:opacity-90 animate-fadeIn"
                   onClick={() => navigate("/profile")}
                 />
                 <button
                   onClick={() => openCompose("story")}
-                  className="flex-grow text-left text-xs bg-slate-50 hover:bg-slate-100 dark:bg-zinc-950 dark:hover:bg-zinc-800 text-gray-500 font-semibold px-4 py-2.5 rounded-full border border-gray-200 dark:border-zinc-800 transition"
+                  className="flex-grow text-left text-xs bg-slate-50 hover:bg-slate-100 dark:bg-zinc-950 dark:hover:bg-zinc-800 text-gray-550 font-semibold px-4 py-2.5 rounded-full border border-gray-200 dark:border-zinc-800 transition"
                 >
                   Share an experience, doubt, or poll… (Markdown enabled)
                 </button>
               </div>
               <div className="flex justify-around items-center border-t border-gray-100 dark:border-zinc-800 mt-3 pt-2 text-[10px] font-bold text-gray-550 dark:text-gray-400">
                 {[
-                  { type: "story", icon: "📝", label: "Write Story" },
-                  { type: "query", icon: "❓", label: "Ask Doubt" },
-                  { type: "poll",  icon: "📊", label: "Create Poll" },
+                  { type: "story", icon: <BookOpen className="w-4 h-4 text-purple-600 dark:text-purple-400" />, label: "Write Story" },
+                  { type: "query", icon: <HelpCircle className="w-4 h-4 text-purple-600 dark:text-purple-400" />, label: "Ask Doubt" },
+                  { type: "poll",  icon: <BarChart3 className="w-4 h-4 text-purple-600 dark:text-purple-400" />, label: "Create Poll" },
                 ].map(({ type, icon, label }) => (
                   <button
                     key={type}
                     onClick={() => openCompose(type)}
                     className="flex items-center gap-2 hover:bg-gray-50 dark:hover:bg-zinc-850 px-3 py-1.5 rounded-lg transition"
                   >
-                    <span className="text-sm">{icon}</span>
+                    {icon}
                     <span>{label}</span>
                   </button>
                 ))}
@@ -1327,18 +1343,19 @@ const Staffroom = () => {
                   { id: "story", label: "Stories" },
                   { id: "query", label: "Queries" },
                   { id: "poll", label: "Polls" },
-                  { id: "saved", label: `🔖 Saved${bookmarkedIds.length > 0 ? ` (${bookmarkedIds.length})` : ""}` },
+                  { id: "saved", label: `Saved${bookmarkedIds.length > 0 ? ` (${bookmarkedIds.length})` : ""}`, icon: <Bookmark className="w-3 h-3 mr-1" /> },
                 ].map((tab) => (
                   <button
                     key={tab.id}
                     onClick={() => { setActiveFilter(tab.id); setTopicFilter(""); }}
-                    className={`text-xs font-bold border-b-2 pb-1 transition ${
+                    className={`text-xs font-bold border-b-2 pb-1 transition flex items-center ${
                       activeFilter === tab.id
                         ? "border-purple-650 text-purple-650 dark:text-purple-400"
                         : "border-transparent text-gray-400 hover:text-gray-500"
                     }`}
                   >
-                    {tab.label}
+                    {tab.icon}
+                    <span>{tab.label}</span>
                   </button>
                 ))}
               </div>
@@ -1474,7 +1491,7 @@ const Staffroom = () => {
                           <div className="text-left">
                             <button
                               onClick={() => openUserModal(thread.author_id)}
-                              className="text-xs text-purple-700 font-black hover:underline block leading-tight"
+                              className="text-xs text-purple-700 dark:text-purple-400 font-black hover:underline block leading-tight"
                             >
                               {authorName}
                             </button>
@@ -1489,8 +1506,8 @@ const Staffroom = () => {
                               else if (author.role === "expert") badgeClass = "bg-indigo-100 text-indigo-700 dark:bg-indigo-950/50 dark:text-indigo-300";
                               else if (author.role === "teacher") badgeClass = "bg-purple-100 text-purple-700 dark:bg-purple-950/50 dark:text-purple-300";
                               return (
-                                <span className={`text-[8px] font-extrabold px-1 py-0.2 rounded tracking-wider uppercase ${badgeClass} inline-block mt-0.5`}>
-                                  {author.role || "MEMBER"} {author.is_verified ? "🛡️" : ""}
+                                <span className={`text-[8px] font-extrabold px-1 py-0.2 rounded tracking-wider uppercase ${badgeClass} inline-flex items-center gap-0.5 mt-0.5`}>
+                                  {author.role || "MEMBER"} {author.is_verified && <ShieldCheck className="w-2.5 h-2.5 text-indigo-650 dark:text-indigo-400 inline-block" />}
                                 </span>
                               );
                             })()}
@@ -1501,9 +1518,9 @@ const Staffroom = () => {
                         <button
                           onClick={() => toggleBookmark(thread.id)}
                           title={isBookmarked ? "Remove bookmark" : "Save for later"}
-                          className={`text-sm transition ${isBookmarked ? "text-amber-500" : "text-gray-300 hover:text-amber-400"}`}
+                          className={`transition p-1 rounded-lg hover:bg-gray-50 dark:hover:bg-zinc-850 ${isBookmarked ? "text-amber-500" : "text-gray-300 dark:text-zinc-650 hover:text-amber-400"}`}
                         >
-                          🔖
+                          <Bookmark className="w-4 h-4" fill={isBookmarked ? "currentColor" : "none"} />
                         </button>
 
                         {/* Delete */}
@@ -1524,7 +1541,7 @@ const Staffroom = () => {
                     )}
 
                     {/* Body */}
-                    <div className="prose prose-sm dark:prose-invert max-w-none mb-4 text-left leading-relaxed text-gray-800 dark:text-gray-150 font-medium">
+                    <div className="prose prose-sm dark:prose-invert max-w-none mb-4 text-left leading-relaxed text-gray-800 dark:text-zinc-200 font-medium">
                       {renderMarkdown(thread.body)}
                     </div>
 
@@ -1546,7 +1563,7 @@ const Staffroom = () => {
                           )}
                           {linkedMeme.format === "audio" && (
                             <div className="flex flex-col items-center justify-center p-2 w-full h-full">
-                              <span className="text-xl mb-1">🎵</span>
+                              <Music className="w-5 h-5 mb-1 text-purple-650 dark:text-purple-400" />
                               <audio src={linkedMeme.media_url} controls className="w-full max-w-[120px] scale-90" onClick={(e) => e.stopPropagation()} />
                             </div>
                           )}
@@ -1565,15 +1582,37 @@ const Staffroom = () => {
 
                     {/* Attachment */}
                     {thread.attachment_url ? (
-                      <div className="my-3 p-2 border border-dashed rounded text-xs text-gray-500 flex items-center space-x-1.5 bg-gray-50 dark:bg-gray-900">
-                        <span>📎</span>
-                        <a href={thread.attachment_url} target="_blank" rel="noreferrer" className="hover:underline text-purple-650 font-semibold">
-                          {thread.attachment_name || "View Attachment"}
-                        </a>
+                      <div className="my-3 p-3 border border-gray-150 dark:border-zinc-800 rounded-xl bg-gray-55/40 dark:bg-zinc-950/40 text-left space-y-2.5">
+                        <div className="flex items-center space-x-2 text-xs font-semibold text-gray-550 dark:text-gray-400">
+                          <Paperclip className="w-3.5 h-3.5 text-gray-400" />
+                          <a 
+                            href={thread.attachment_url} 
+                            target="_blank" 
+                            rel="noreferrer" 
+                            className="hover:underline text-purple-650 dark:text-purple-400 font-bold truncate max-w-xs sm:max-w-md"
+                          >
+                            {thread.attachment_name || "View Attachment"}
+                          </a>
+                        </div>
+                        {/* Inline Image Preview if it's an image */}
+                        {((thread.attachment_name && thread.attachment_name.match(/\.(jpeg|jpg|gif|png|webp|svg)$/i)) || thread.attachment_url.toLowerCase().includes("image")) && (
+                          <div className="max-w-full sm:max-w-md rounded-xl overflow-hidden border border-gray-200/60 dark:border-zinc-800 bg-white dark:bg-zinc-900 shadow-sm hover:shadow transition-shadow duration-300">
+                            <a href={thread.attachment_url} target="_blank" rel="noreferrer" title="Click to view full size">
+                              <img 
+                                src={thread.attachment_url} 
+                                alt={thread.attachment_name || "Attachment"} 
+                                className="max-h-72 w-full object-contain mx-auto hover:opacity-95 transition-opacity"
+                                onError={(e) => {
+                                  e.target.style.display = 'none';
+                                }}
+                              />
+                            </a>
+                          </div>
+                        )}
                       </div>
                     ) : thread.attachment_name ? (
-                      <div className="my-3 p-2 border border-dashed rounded text-xs text-gray-400 flex items-center space-x-1.5 bg-gray-50 dark:bg-gray-900 italic">
-                        <span>📎</span>
+                      <div className="my-3 p-3 border border-dashed rounded-xl text-xs text-gray-400 dark:text-gray-555 flex items-center space-x-2 bg-gray-50/30 dark:bg-zinc-950/20 italic text-left">
+                        <Paperclip className="w-3.5 h-3.5 text-gray-400" />
                         <span>{thread.attachment_name} (file expired or unavailable)</span>
                       </div>
                     ) : null}
@@ -1595,7 +1634,7 @@ const Staffroom = () => {
                                     </span>
                                   ))}
                               </div>
-                              <span className="font-bold text-gray-600 dark:text-gray-300">{totalReactions}</span>
+                              <span className="font-bold text-gray-650 dark:text-gray-300">{totalReactions}</span>
                             </div>
                           )}
                         </div>
@@ -1630,7 +1669,15 @@ const Staffroom = () => {
                               getReactionStyle(myReaction).className
                             }`}
                           >
-                            <span>{myReaction || "👍"}</span>
+                            {myReaction ? (
+                              myReaction === "👍" ? (
+                                <ThumbsUp className="w-4 h-4 fill-current text-blue-600 dark:text-blue-400" />
+                              ) : (
+                                <span className="text-base leading-none">{myReaction}</span>
+                              )
+                            ) : (
+                              <ThumbsUp className="w-4 h-4 text-gray-400 dark:text-gray-505" />
+                            )}
                             <span>{getReactionStyle(myReaction).label}</span>
                           </button>
 
@@ -1654,8 +1701,8 @@ const Staffroom = () => {
                           )}
                         </div>
 
-                        <span className="text-gray-400 flex items-center space-x-1.5">
-                          <span>💬</span>
+                        <span className="text-gray-400 dark:text-gray-550 flex items-center space-x-1.5">
+                          <MessageSquare className="w-4 h-4" />
                           <span>Reply</span>
                         </span>
                       </div>
@@ -1664,11 +1711,11 @@ const Staffroom = () => {
                       <button
                         onClick={() => handleFlagContent(thread.id, "post")}
                         className={`text-xs flex items-center gap-1 transition ${
-                          flaggedByUser[thread.id] ? "text-red-500 font-bold" : "text-gray-400 hover:text-red-500"
+                          flaggedByUser[thread.id] ? "text-red-500 font-bold" : "text-gray-400 dark:text-gray-550 hover:text-red-500"
                         }`}
                         title="Report Inappropriate Thread"
                       >
-                        <span>🏳️</span>
+                        <Flag className="w-3.5 h-3.5" fill={flaggedByUser[thread.id] ? "currentColor" : "none"} />
                         <span>{flaggedByUser[thread.id] ? "Reported" : "Report"}</span>
                       </button>
                     </div>
@@ -1709,8 +1756,9 @@ const Staffroom = () => {
                                   )}
                                 </div>
                                 {isAccepted ? (
-                                  <span className="text-xs font-bold text-emerald-700 flex items-center space-x-1">
-                                    <span>🛡️</span><span>Accepted Solution</span>
+                                  <span className="text-xs font-bold text-emerald-700 flex items-center gap-1.5">
+                                    <ShieldCheck className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                                    <span>Accepted Solution</span>
                                   </span>
                                 ) : (
                                   user && user.uid === thread.author_id && thread.post_type === "query" && !isSolved && (

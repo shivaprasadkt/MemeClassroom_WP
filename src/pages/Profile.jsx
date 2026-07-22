@@ -19,15 +19,62 @@ import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
 import { useAuth } from "../context/AuthContext";
 import { useUdl } from "../context/UdlContext";
 import { useToast } from "../components/ToastNotification";
+import { 
+  Pencil, 
+  CheckCircle2, 
+  MapPin, 
+  Eye, 
+  FileText, 
+  Folder, 
+  MessageSquare, 
+  Star, 
+  Heart, 
+  Shield, 
+  Lock, 
+  Award, 
+  Trophy, 
+  Gem,
+  Plus
+} from "lucide-react";
 
 const MILESTONES = [0, 1, 5, 10, 25, 50];
 const LEVEL_NAMES = ["None", "Bronze", "Silver", "Gold", "Platinum", "Diamond"];
 
-const getBadgeIcon = (level) => {
-  if (level >= 5) return "/diamond.png";
-  if (level >= 3) return "/trophy.png";
-  if (level >= 1) return "/medal.png";
-  return "/medal.png";
+const BadgeIcon = ({ level }) => {
+  if (level === 0) {
+    return (
+      <div className="relative flex items-center justify-center w-12 h-12">
+        <Shield className="w-12 h-12 text-gray-300 dark:text-zinc-700 stroke-[1.25]" />
+        <Lock className="absolute w-4 h-4 text-purple-650 dark:text-purple-400" />
+      </div>
+    );
+  }
+
+  let colorClass = "text-amber-600 dark:text-amber-500"; // Bronze
+  if (level === 2) colorClass = "text-slate-400 dark:text-slate-300"; // Silver
+  if (level === 3) colorClass = "text-yellow-500 dark:text-yellow-400"; // Gold
+  if (level === 4) colorClass = "text-cyan-550 dark:text-cyan-400"; // Platinum
+  if (level === 5) colorClass = "text-indigo-600 dark:text-indigo-400 animate-pulse"; // Diamond
+
+  if (level >= 5) {
+    return (
+      <div className="relative flex items-center justify-center w-10 h-10">
+        <Gem className={`w-10 h-10 ${colorClass}`} />
+      </div>
+    );
+  }
+  if (level >= 3) {
+    return (
+      <div className="relative flex items-center justify-center w-10 h-10">
+        <Trophy className={`w-10 h-10 ${colorClass}`} />
+      </div>
+    );
+  }
+  return (
+    <div className="relative flex items-center justify-center w-10 h-10">
+      <Award className={`w-10 h-10 ${colorClass}`} />
+    </div>
+  );
 };
 
 const CATEGORY_NAMES = {
@@ -469,14 +516,78 @@ const Profile = () => {
   };
 
   const containerClass = highContrastMode
-    ? "bg-zinc-900 border border-zinc-800 text-white shadow-sm rounded-xl"
-    : "bg-white border border-gray-200 shadow-sm rounded-xl";
+    ? "bg-zinc-900 border border-zinc-800 text-white shadow-md rounded-2xl transition-all duration-300"
+    : "bg-white border border-gray-150 shadow-[0_4px_20px_-4px_rgba(0,0,0,0.05)] hover:shadow-[0_8px_30px_-6px_rgba(0,0,0,0.08)] rounded-2xl transition-all duration-300";
+
+  const inputClass = highContrastMode
+    ? "w-full px-3 py-2 border border-zinc-800 bg-zinc-950 rounded-xl text-xs text-white placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-purple-500"
+    : "w-full px-3 py-2 border border-gray-200 bg-gray-50 rounded-xl text-xs text-gray-850 focus:outline-none focus:ring-1 focus:ring-purple-500";
 
   const renderCardGrid = (items, isBookmarkTab = false) => {
     if (items.length === 0) {
+      let title = "Nothing here yet!";
+      let subtitle = "";
+      let btnText = "";
+      let btnLink = "";
+      let icon = null;
+
+      if (activeTab === "my-memes") {
+        subtitle = "You haven't created or shared any memes yet. Start creating and share your humour with the classroom.";
+        btnText = "Create Your First Meme";
+        btnLink = "/lab";
+        icon = (
+          <div className="relative w-24 h-24 mx-auto mb-4 flex items-center justify-center">
+            <div className="absolute inset-0 bg-indigo-50 dark:bg-indigo-950/20 rounded-full scale-75 animate-pulse" />
+            <svg viewBox="0 0 100 100" className="w-16 h-16 text-indigo-650 dark:text-indigo-400 relative z-10" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M12 30 H88 L78 85 H22 Z" />
+              <path d="M12 30 L50 48 L88 30" />
+              <path d="M50 48 V85" />
+            </svg>
+            <span className="absolute top-1 right-2 text-xl animate-bounce">✈️</span>
+          </div>
+        );
+      } else if (activeTab === "my-drafts") {
+        subtitle = "You don't have any saved drafts. You can save your work mid-way and resume later.";
+        btnText = "Start a New Draft";
+        btnLink = "/lab";
+        icon = (
+          <div className="relative w-24 h-24 mx-auto mb-4 flex items-center justify-center">
+            <div className="absolute inset-0 bg-purple-50 dark:bg-purple-950/20 rounded-full scale-75 animate-pulse" />
+            <svg viewBox="0 0 100 100" className="w-16 h-16 text-purple-650 dark:text-purple-400 relative z-10" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="25" y="15" width="50" height="70" rx="5" />
+              <line x1="38" y1="35" x2="62" y2="35" />
+              <line x1="38" y1="50" x2="62" y2="50" />
+              <line x1="38" y1="65" x2="52" y2="65" />
+            </svg>
+            <span className="absolute bottom-2 right-2 text-lg">⏳</span>
+          </div>
+        );
+      } else {
+        subtitle = "You haven't bookmarked any memes yet. Explore creations from others and bookmark them here.";
+        btnText = "Explore Meme Library";
+        btnLink = "/library";
+        icon = (
+          <div className="relative w-24 h-24 mx-auto mb-4 flex items-center justify-center">
+            <div className="absolute inset-0 bg-rose-50 dark:bg-rose-950/20 rounded-full scale-75 animate-pulse" />
+            <svg viewBox="0 0 100 100" className="w-16 h-16 text-rose-500 dark:text-rose-400 relative z-10" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M30 15 H70 V85 L50 70 L30 85 Z" fill="currentColor" fillOpacity="0.1" />
+            </svg>
+            <span className="absolute top-2 right-2 text-lg">🔍</span>
+          </div>
+        );
+      }
+
       return (
-        <div className={`p-12 text-center text-gray-500 ${containerClass}`}>
-          <p className="text-sm font-medium">No items found in this section.</p>
+        <div className={`p-12 text-center flex flex-col items-center justify-center ${containerClass}`}>
+          {icon}
+          <h4 className="text-xl font-bold text-gray-900 dark:text-white mb-2">{title}</h4>
+          <p className="text-xs text-gray-500 dark:text-gray-400 max-w-sm mb-6 leading-relaxed">{subtitle}</p>
+          <button
+            onClick={() => navigate(btnLink)}
+            className="bg-indigo-600 hover:bg-indigo-750 text-white font-bold text-xs px-5 py-2.5 rounded-xl transition flex items-center gap-1.5 shadow-md shadow-indigo-600/10"
+          >
+            {btnText} <Plus className="w-3.5 h-3.5" />
+          </button>
         </div>
       );
     }
@@ -610,108 +721,195 @@ const Profile = () => {
 
       {/* 1. Profile Demographics Card Header */}
       {profile && (
-        <div className={`p-6 ${containerClass}`}>
-          <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
-            <div className="flex flex-col sm:flex-row items-center gap-4">
+        <div className={`p-8 md:p-10 relative overflow-hidden ${containerClass}`}>
+          {/* Top-left abstract shape */}
+          <div className="absolute top-0 left-0 w-64 h-40 pointer-events-none select-none z-0">
+            <svg viewBox="0 0 200 120" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full text-purple-100/75 dark:text-purple-950/20">
+              <path d="M0 0H140C125 45 80 65 55 105C35 135 0 120 0 120V0Z" fill="currentColor" />
+            </svg>
+          </div>
+
+          {/* Bottom-right abstract shape */}
+          <div className="absolute bottom-0 right-0 w-72 h-44 pointer-events-none select-none z-0">
+            <svg viewBox="0 0 220 150" fill="none" xmlns="http://www.w3.org/2000/svg" className="w-full h-full text-amber-100/70 dark:text-amber-950/15">
+              <path d="M220 150H70C85 105 125 90 145 45C165 -5 220 0 220 0V150Z" fill="currentColor" />
+            </svg>
+          </div>
+
+          {/* Dot grid decoration */}
+          <div className="absolute bottom-4 right-72 w-24 h-16 pointer-events-none opacity-20 dark:opacity-10 select-none hidden md:block z-0">
+            <div className="grid grid-cols-6 gap-2">
+              {[...Array(24)].map((_, i) => (
+                <div key={i} className="w-1 h-1 rounded-full bg-purple-400 dark:bg-purple-650" />
+              ))}
+            </div>
+          </div>
+
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+            <div className="flex flex-col sm:flex-row items-center gap-5">
               <div
-                className="relative group cursor-pointer flex-shrink-0"
+                className="relative group cursor-pointer flex-shrink-0 z-10"
                 onClick={() => setShowAvatarModal(true)}
                 title="Click to Change Avatar"
               >
                 <img
                   src={profile.avatar_url || "/avatar1.png"}
-                  className="w-20 h-20 rounded-full object-cover border-4 border-purple-200 dark:border-purple-800 transition group-hover:scale-105"
+                  className="w-24 h-24 rounded-full object-cover border-4 border-purple-200 dark:border-purple-800/80 transition duration-300 group-hover:scale-105 shadow-md"
                   alt="Profile Avatar"
                 />
                 <div className="absolute inset-0 bg-black/50 rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition duration-200">
                   <span className="text-[10px] text-white font-extrabold tracking-wide uppercase text-center px-2 leading-tight">Change Avatar</span>
                 </div>
               </div>
-              <div className="text-center sm:text-left">
-                <div className="flex items-center justify-center sm:justify-start space-x-2.5">
-                  <h2 className="text-3xl font-extrabold tracking-tight text-gray-900 dark:text-white">
+              <div className="text-center sm:text-left space-y-1">
+                <div className="flex items-center justify-center sm:justify-start gap-2.5">
+                  <h2 className="text-2xl sm:text-3xl font-black tracking-tight text-gray-900 dark:text-white">
                     {profile.name}
                   </h2>
                   {/* verify badge  */}
                   {profile.is_verified && (
-                    <img src="/badge-verify.png" className="w-7 h-7 inline-block" alt="Verified Creator" title="Verified Creator" />
+                    <CheckCircle2 className="w-6 h-6 text-indigo-650 dark:text-indigo-400 fill-indigo-50 dark:fill-indigo-950/50" />
                   )}
                 </div>
-                <p className="text-xs font-bold uppercase tracking-wider text-purple-650 mt-1 capitalize">
+                <p className="text-xs font-bold uppercase tracking-wider text-purple-650 dark:text-purple-400 mt-1 capitalize">
                   {profile.role} • {profile.institution}
                 </p>
-                <p className="text-xs text-gray-500 mt-0.5">
+                <p className="text-xs text-gray-500 dark:text-gray-400 flex items-center justify-center sm:justify-start gap-1">
+                  <MapPin className="w-3.5 h-3.5 text-gray-400 dark:text-gray-500" />
                   {[profile.place, profile.state, profile.country].filter(Boolean).join(", ") || "Location details not set"}
                 </p>
                 {profile.tagline && (
-                  <p className="text-xs italic text-gray-400 dark:text-gray-500 mt-2 max-w-sm">
+                  <p className="text-xs italic text-gray-500 dark:text-gray-400 mt-2 max-w-md leading-relaxed">
                     "{profile.tagline}"
                   </p>
                 )}
-                <button
-                  onClick={openEditModal}
-                  className="mt-3 bg-purple-50 dark:bg-purple-950/20 hover:bg-purple-100 dark:hover:bg-purple-900/35 border border-purple-200 dark:border-purple-850 text-purple-700 dark:text-purple-300 font-bold text-xs px-3.5 py-1.5 rounded-lg transition"
-                >
-                  ⚙️ Edit Profile Details
-                </button>
               </div>
             </div>
 
-            {profile.id_card_url && (
-              <a
-                href={profile.id_card_url}
-                target="_blank"
-                rel="noreferrer"
-                className="text-xs font-bold bg-indigo-50 text-indigo-700 dark:bg-indigo-950/20 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-850 px-4 py-2 rounded-lg hover:bg-indigo-100 transition"
+            <div className="flex flex-col sm:flex-row md:flex-col items-center sm:justify-center md:items-end gap-3 flex-shrink-0">
+              <button
+                onClick={openEditModal}
+                className="bg-white dark:bg-zinc-900 hover:bg-gray-50 dark:hover:bg-zinc-850 border border-gray-200 dark:border-zinc-800 text-gray-700 dark:text-gray-300 font-bold text-xs px-4 py-2.5 rounded-xl transition flex items-center gap-1.5 shadow-sm"
               >
-                🔍 Preview Verification ID Card
-              </a>
-            )}
+                <Pencil className="w-3.5 h-3.5 text-gray-500" />
+                Edit Profile
+              </button>
+
+              {profile.id_card_url && (
+                <a
+                  href={profile.id_card_url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-xs font-bold bg-indigo-55/40 text-indigo-700 dark:bg-indigo-950/20 dark:text-indigo-300 border border-indigo-100 dark:border-indigo-900/60 px-4 py-2.5 rounded-xl hover:bg-indigo-100/50 dark:hover:bg-indigo-950/40 transition shadow-sm flex items-center gap-1.5"
+                >
+                  <Eye className="w-3.5 h-3.5" />
+                  Preview ID Card
+                </a>
+              )}
+            </div>
           </div>
         </div>
       )}
 
       {/* 2. Scoreboard Activity Statistics Panel */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
         {[
-          { label: "Memes Shared", val: stats.memes_created_count, icon: <img src="/research.png" alt="not" className="w-8 h-8 mx-auto" /> },
-          { label: "Resources Shared", val: stats.resources_contributed_count, icon: <img src="/process.png" alt="not" className="w-8 h-8 mx-auto" /> },
-          { label: "Staffroom Posts", val: stats.staffroom_posts_count, icon: <img src="/speech-bubbles.png" alt="not" className="w-8 h-8 mx-auto" /> },
-          { label: "Ratings Provided", val: stats.ratings_provided_count, icon: <img src="/star.png" alt="not" className="w-8 h-8 mx-auto" /> },
-          { label: "Likes Received", val: stats.total_likes_received, icon: <img src="/shape.png" alt="not" className="w-8 h-8 mx-auto" /> }
+          {
+            label: "Memes Shared",
+            val: stats.memes_created_count,
+            iconBg: "bg-purple-50 dark:bg-purple-950/30",
+            iconColor: "text-purple-650 dark:text-purple-400",
+            icon: <FileText className="w-5 h-5" />
+          },
+          {
+            label: "Resources Shared",
+            val: stats.resources_contributed_count,
+            iconBg: "bg-emerald-50 dark:bg-emerald-950/30",
+            iconColor: "text-emerald-600 dark:text-emerald-400",
+            icon: <Folder className="w-5 h-5" />
+          },
+          {
+            label: "Staffroom Posts",
+            val: stats.staffroom_posts_count,
+            iconBg: "bg-blue-50 dark:bg-blue-950/30",
+            iconColor: "text-blue-600 dark:text-blue-400",
+            icon: <MessageSquare className="w-5 h-5" />
+          },
+          {
+            label: "Ratings Provided",
+            val: stats.ratings_provided_count,
+            iconBg: "bg-amber-50 dark:bg-amber-950/30",
+            iconColor: "text-amber-500 dark:text-amber-400",
+            icon: <Star className="w-5 h-5" />
+          },
+          {
+            label: "Likes Received",
+            val: stats.total_likes_received,
+            iconBg: "bg-rose-50 dark:bg-rose-950/30",
+            iconColor: "text-rose-500 dark:text-rose-400",
+            icon: <Heart className="w-5 h-5" fill="currentColor" />
+          }
         ].map((stat, idx) => (
-          <div key={idx} className={`p-4 text-center ${containerClass}`}>
-            <span className="text-xl block mb-2">{stat.icon}</span>
-            <span className="block text-[10px] text-gray-400 uppercase font-semibold">{stat.label}</span>
-            <span className="text-2xl font-extrabold tracking-tight mt-1 block">{stat.val}</span>
+          <div key={idx} className={`p-4 flex items-center gap-4 ${containerClass}`}>
+            <div className={`p-3 rounded-xl flex-shrink-0 ${stat.iconBg} ${stat.iconColor}`}>
+              {stat.icon}
+            </div>
+            <div className="min-w-0">
+              <span className="block text-[10px] text-gray-400 dark:text-gray-500 uppercase font-bold tracking-wider truncate">
+                {stat.label}
+              </span>
+              <span className="text-2xl font-black text-gray-900 dark:text-white block mt-0.5 leading-none">
+                {stat.val}
+              </span>
+            </div>
           </div>
         ))}
       </div>
 
       {/* 3. Automatic 5-Category Badge progression matrix */}
       <div className={`p-6 ${containerClass}`}>
-        <h3 className="text-sm font-bold uppercase tracking-wider border-b pb-2 mb-4">Milestone Progression Badges</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-6 text-xs font-semibold">
+        <h3 className="text-sm font-bold uppercase tracking-wider border-b border-gray-100 dark:border-gray-800 pb-2 mb-6 text-gray-905 dark:text-white">
+          Milestone Progression Badges
+        </h3>
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-6 text-xs font-semibold">
           {Object.entries(CATEGORY_NAMES).map(([category, config]) => {
             const count = stats[config.statKey] || 0;
             const progress = getProgressDetails(count);
 
             return (
-              <div key={category} className="space-y-2 border border-gray-100 dark:border-gray-800 p-3 rounded-lg bg-gray-50 dark:bg-gray-900">
-                <span className="block text-gray-400 uppercase text-[9px] truncate">{config.label}</span>
-                <div className="flex items-center space-x-1.5">
-                  <span className="text-base"><img src={getBadgeIcon(progress.currentLevel)} alt="Badge icon" className="w-6 h-6" /></span>
-                  <span className="font-bold text-gray-850 dark:text-gray-100">{progress.currentBadgeName}</span>
+              <div
+                key={category}
+                className="flex flex-col items-center justify-center p-5 text-center rounded-2xl border border-purple-50/50 dark:border-purple-950/20 bg-purple-50/20 dark:bg-purple-950/10 hover:bg-purple-50/40 dark:hover:bg-purple-950/15 transition-all duration-300 shadow-sm"
+              >
+                {/* Dynamic Badge Icon */}
+                <div className="mb-3">
+                  <BadgeIcon level={progress.currentLevel} />
                 </div>
+                
+                {/* Label */}
+                <span className="block text-gray-850 dark:text-gray-100 font-extrabold text-xs leading-tight mb-1 text-center">
+                  {config.label}
+                </span>
 
-                {/* Horizontal Progress Bar with animation */}
-                <div className="w-full bg-gray-250 dark:bg-gray-800 h-1.5 rounded-full overflow-hidden">
+                {/* Level / Status */}
+                <span className={`block text-[10px] uppercase font-bold tracking-wider mb-3 text-center ${
+                  progress.currentLevel > 0 ? "text-indigo-650 dark:text-indigo-400" : "text-gray-400 dark:text-gray-500"
+                }`}>
+                  {progress.currentLevel > 0 ? LEVEL_NAMES[progress.currentLevel] : "Locked"}
+                </span>
+
+                {/* Horizontal Progress Bar */}
+                <div className="w-full bg-gray-200 dark:bg-zinc-800 h-1.5 rounded-full overflow-hidden mb-2">
                   <div
-                    className="bg-purple-650 h-full badge-progress-bar rounded-full"
-                    style={{ '--progress-target': `${progress.progressPercent}%`, width: `${progress.progressPercent}%` }}
+                    className="bg-indigo-600 h-full rounded-full transition-all duration-500"
+                    style={{ width: `${progress.progressPercent}%` }}
                   ></div>
                 </div>
-                <span className="text-[10px] text-gray-500 block leading-tight">{progress.text}</span>
+
+                {/* Progress Details text */}
+                <span className="text-[10px] text-gray-500 dark:text-gray-400 block leading-tight font-medium text-center">
+                  {progress.text}
+                </span>
               </div>
             );
           })}

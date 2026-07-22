@@ -30,7 +30,7 @@ export const UserModalProvider = ({ children }) => {
       // 1. Fetch user demographics profile
       const userDocRef = doc(db, "users", userId);
       const userDocSnap = await getDoc(userDocRef);
-      
+
       if (userDocSnap.exists()) {
         setUserData(userDocSnap.data());
       }
@@ -39,7 +39,7 @@ export const UserModalProvider = ({ children }) => {
       const badgesColRef = collection(db, "badges");
       const q = query(badgesColRef, where("user_id", "==", userId));
       const querySnap = await getDocs(q);
-      
+
       const badgeList = [];
       querySnap.forEach(d => {
         badgeList.push({ id: d.id, ...d.data() });
@@ -66,19 +66,19 @@ export const UserModalProvider = ({ children }) => {
   return (
     <UserModalContext.Provider value={{ openUserModal, closeUserModal }}>
       {children}
-      
+
       {/* Global User Info Box Overlay Modal */}
       {isOpen && (
         <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4">
           <div className={`w-full max-w-md p-6 overflow-y-auto max-h-[90vh] ${modalClass}`}>
-            
+
             {loading ? (
               <div className="flex items-center justify-center py-12">
                 <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-purple-600"></div>
               </div>
             ) : userData ? (
               <div className="space-y-6">
-                
+
                 {/* Profile demographics header details */}
                 <div className="flex items-center space-x-4">
                   <img
@@ -108,8 +108,8 @@ export const UserModalProvider = ({ children }) => {
                   {userBadges.length > 0 ? (
                     <div className="flex flex-wrap gap-2">
                       {userBadges.map((badge) => (
-                        <span 
-                          key={badge.id} 
+                        <span
+                          key={badge.id}
                           className="bg-purple-55 text-purple-750 dark:bg-purple-950/20 dark:text-purple-300 text-[10px] font-bold px-2 py-1 rounded border border-purple-200 dark:border-purple-800 flex items-center space-x-1"
                         >
                           <img src={getBadgeIcon(badge.level)} className="w-4 h-4" alt="Badge icon" />
@@ -127,8 +127,8 @@ export const UserModalProvider = ({ children }) => {
                   {userData.is_contact_public ? (
                     <div>
                       <h4 className="text-xs font-bold uppercase tracking-wider text-gray-400 mb-1">Direct Contact</h4>
-                      <a 
-                        href={`mailto:${userData.email}`} 
+                      <a
+                        href={`mailto:${userData.email}`}
                         className="text-xs text-indigo-650 hover:underline font-semibold"
                       >
                         {userData.email}
@@ -159,7 +159,7 @@ export const UserModalProvider = ({ children }) => {
                 </div>
               </div>
             )}
-            
+
           </div>
         </div>
       )}

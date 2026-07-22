@@ -111,7 +111,7 @@ const Navbar = () => {
       { to: "/library", label: "Library", Icon: BookOpen },
       { to: "/lab", label: "Lab", Icon: FlaskConical },
       { to: "/staffroom", label: "Staffroom", Icon: MessageSquare },
-      { to: "/resources", label: "Meme Reads", Icon: BookOpenCheck },
+      { to: "/resources", label: "Resources", Icon: BookOpenCheck },
       { to: "/about", label: "About", Icon: Info },
     ];
 
